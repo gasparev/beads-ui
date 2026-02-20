@@ -19,7 +19,7 @@ describe('list adapters for subscription types', () => {
 
   test('mapSubscriptionToBdArgs returns args for epics', () => {
     const args = mapSubscriptionToBdArgs({ type: 'epics' });
-    expect(args).toEqual(['epic', 'status', '--json']);
+    expect(args).toEqual(['list', '--json', '--type', 'epic']);
   });
 
   test('mapSubscriptionToBdArgs returns args for blocked-issues', () => {
@@ -40,7 +40,7 @@ describe('list adapters for subscription types', () => {
 
   test('mapSubscriptionToBdArgs returns args for closed-issues', () => {
     const args = mapSubscriptionToBdArgs({ type: 'closed-issues' });
-    expect(args).toEqual(['list', '--json', '--status', 'closed']);
+    expect(args).toEqual(['list', '--json', '--status', 'closed', '--limit', '1000']);
   });
 
   test('mapSubscriptionToBdArgs returns args for issue-detail', () => {

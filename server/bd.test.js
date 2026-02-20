@@ -2,7 +2,7 @@ import { spawn as spawnMock } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { getBdBin, getGitUserName, runBd, runBdJson } from './bd.js';
+import { getBdBin, getGitUserName, runBd, runBdJson, _resetQueue } from './bd.js';
 
 // Mock child_process.spawn before importing the module under test
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
@@ -18,18 +18,28 @@ function makeFakeProc(stdoutText, stderrText, code) {
   const err = new PassThrough();
   cp.stdout = out;
   cp.stderr = err;
-  // Simulate async emission
-  queueMicrotask(() => {
-    if (stdoutText) {
-      out.write(stdoutText);
+  // Emit data/close once a 'close' listener is attached (i.e. after
+  // _spawnBd has set up its event handlers).  This is necessary because
+  // runBd serializes via a promise queue, so spawn is called inside a
+  // microtask — the old queueMicrotask() approach fired before spawn ran.
+  const origOn = cp.on.bind(cp);
+  cp.on = (event, fn) => {
+    origOn(event, fn);
+    if (event === 'close') {
+      queueMicrotask(() => {
+        if (stdoutText) {
+          out.write(stdoutText);
+        }
+        out.end();
+        if (stderrText) {
+          err.write(stderrText);
+        }
+        err.end();
+        cp.emit('close', code);
+      });
     }
-    out.end();
-    if (stderrText) {
-      err.write(stderrText);
-    }
-    err.end();
-    cp.emit('close', code);
-  });
+    return cp;
+  };
   return cp;
 }
 
@@ -37,6 +47,7 @@ const mockedSpawn = /** @type {import('vitest').Mock} */ (spawnMock);
 
 beforeEach(() => {
   mockedSpawn.mockReset();
+  _resetQueue();
 });
 
 describe('getBdBin', () => {

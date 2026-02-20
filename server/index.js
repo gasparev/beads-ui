@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { createServer } from 'node:http';
 import { createApp } from './app.js';
 import { printServerUrl } from './cli/daemon.js';
@@ -30,7 +32,10 @@ const log = debug('server');
 // Register the initial workspace (from cwd) so it appears in the workspace picker
 // even without the beads daemon running
 const db_info = resolveDbPath({ cwd: config.root_dir });
-if (db_info.exists) {
+const has_metadata = fs.existsSync(
+  path.join(config.root_dir, '.beads', 'metadata.json')
+);
+if (db_info.exists || has_metadata) {
   registerWorkspace({ path: config.root_dir, database: db_info.path });
 }
 

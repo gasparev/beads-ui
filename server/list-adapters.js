@@ -17,7 +17,7 @@ export function mapSubscriptionToBdArgs(spec) {
       return ['list', '--json'];
     }
     case 'epics': {
-      return ['epic', 'status', '--json'];
+      return ['list', '--json', '--type', 'epic'];
     }
     case 'blocked-issues': {
       return ['blocked', '--json'];
@@ -29,7 +29,7 @@ export function mapSubscriptionToBdArgs(spec) {
       return ['list', '--json', '--status', 'in_progress'];
     }
     case 'closed-issues': {
-      return ['list', '--json', '--status', 'closed'];
+      return ['list', '--json', '--status', 'closed', '--limit', '1000'];
     }
     case 'issue-detail': {
       const p = spec.params || {};
@@ -186,6 +186,15 @@ export async function fetchListForSubscription(spec, options = {}) {
           return false;
         }
         return true;
+      });
+    }
+
+    // For non-epic subscriptions, filter out epics so they only appear
+    // in the dedicated Epics view.
+    if (String(spec.type) !== 'epics') {
+      raw = raw.filter((it) => {
+        const type = /** @type {any} */ (it)?.issue_type;
+        return type !== 'epic';
       });
     }
 
