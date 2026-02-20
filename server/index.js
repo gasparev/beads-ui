@@ -1,6 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { createServer } from 'node:http';
+import path from 'node:path';
 import { createApp } from './app.js';
 import { printServerUrl } from './cli/daemon.js';
 import { getConfig } from './config.js';

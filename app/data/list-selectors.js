@@ -6,7 +6,7 @@
 /**
  * @typedef {{ id: string, title?: string, status?: 'open'|'in_progress'|'closed', priority?: number, issue_type?: string, created_at?: number, updated_at?: number, closed_at?: number }} IssueLite
  */
-import { cmpClosedDesc, cmpPriorityThenCreated } from './sort.js';
+import { cmpPriorityThenCreated } from './sort.js';
 
 /**
  * Factory for list selectors.
@@ -36,25 +36,19 @@ export function createListSelectors(issue_stores = undefined) {
   }
 
   /**
-   * Get entities for a Board column with column-specific sort.
+   * Get entities for a Board column with caller-supplied sort.
    *
    * @param {string} client_id
-   * @param {'ready'|'blocked'|'in_progress'|'closed'} mode
+   * @param {'ready'|'blocked'|'in_progress'|'closed'} _mode - Retained for call-compat but unused.
+   * @param {(a: IssueLite, b: IssueLite) => number} [comparator] - Sort comparator; defaults to priority-then-created.
    * @returns {IssueLite[]}
    */
-  function selectBoardColumn(client_id, mode) {
+  function selectBoardColumn(client_id, _mode, comparator) {
     const arr =
       issue_stores && issue_stores.snapshotFor
         ? issue_stores.snapshotFor(client_id).slice()
         : [];
-    if (mode === 'in_progress') {
-      arr.sort(cmpPriorityThenCreated);
-    } else if (mode === 'closed') {
-      arr.sort(cmpClosedDesc);
-    } else {
-      // ready/blocked share the same sort
-      arr.sort(cmpPriorityThenCreated);
-    }
+    arr.sort(comparator ?? cmpPriorityThenCreated);
     return arr;
   }
 

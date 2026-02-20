@@ -2,7 +2,13 @@ import { spawn as spawnMock } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { getBdBin, getGitUserName, runBd, runBdJson, _resetQueue } from './bd.js';
+import {
+  _resetQueue,
+  getBdBin,
+  getGitUserName,
+  runBd,
+  runBdJson
+} from './bd.js';
 
 // Mock child_process.spawn before importing the module under test
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));

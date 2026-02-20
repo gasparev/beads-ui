@@ -172,8 +172,8 @@ describe('list-selectors', () => {
     const closed = selectors
       .selectBoardColumn('tab:board:closed', 'closed')
       .map((x) => x.id);
-    // closed_at desc: C2, C1, C3
-    expect(closed).toEqual(['C2', 'C1', 'C3']);
+    // default sort (priority→created asc): all priority 2, C3(900), C1(1000), C2(1100)
+    expect(closed).toEqual(['C3', 'C1', 'C2']);
   });
 
   test('selectEpicChildren uses detail:{id} dependents and list sorting (priority→created asc)', async () => {

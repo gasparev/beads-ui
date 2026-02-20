@@ -104,11 +104,11 @@ describe('views/board persisted closed filter via store', () => {
     );
     await view.load();
 
-    // With persisted '7' days, B and C visible (A is 8 days old)
+    // With persisted '7' days, B and C visible (A is 8 days old), sorted by default (priority→id)
     let closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card')
     ).map((el) => el.getAttribute('data-issue-id'));
-    expect(closed_ids).toEqual(['C', 'B']);
+    expect(closed_ids).toEqual(['B', 'C']);
 
     // Select reflects persisted value
     const select = /** @type {HTMLSelectElement} */ (
@@ -121,10 +121,10 @@ describe('views/board persisted closed filter via store', () => {
     select.dispatchEvent(new Event('change', { bubbles: true }));
     expect(store.getState().board.closed_filter).toBe('3');
 
-    // Now still B and C visible (both within 3 days)
+    // Now still B and C visible (both within 3 days), sorted by default (priority→id)
     closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card')
     ).map((el) => el.getAttribute('data-issue-id'));
-    expect(closed_ids).toEqual(['C', 'B']);
+    expect(closed_ids).toEqual(['B', 'C']);
   });
 });

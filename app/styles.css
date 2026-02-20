@@ -1203,6 +1203,30 @@ input.inline-edit:focus {
 }
 
 /* Board view styles */
+/* Sort selector bar above the board */
+.board-sort-bar {
+  display: flex;
+  align-items: center;
+  padding: var(--space-4) var(--space-6) 0;
+}
+.board-sort-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 13px;
+  color: var(--muted);
+}
+.board-sort-selector__label {
+  white-space: nowrap;
+}
+.board-sort-selector select {
+  font-size: 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  padding: 2px 18px 2px 12px;
+  background: var(--panel-bg);
+  color: var(--fg);
+}
 .board-root {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

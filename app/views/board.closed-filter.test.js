@@ -87,7 +87,7 @@ describe('views/board closed filter', () => {
     ).map((el) => el.textContent?.trim());
     expect(closed_ids).toEqual(['C-3']);
 
-    // Change to Last 3 days → C-3 (today) and C-2 (yesterday)
+    // Change to Last 3 days → C-2 (yesterday) and C-3 (today), sorted by default (priority→id)
     const select = /** @type {HTMLSelectElement} */ (
       mount.querySelector('#closed-filter')
     );
@@ -97,14 +97,14 @@ describe('views/board closed filter', () => {
     closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
-    expect(closed_ids).toEqual(['C-3', 'C-2']);
+    expect(closed_ids).toEqual(['C-2', 'C-3']);
 
-    // Change to Last 7 days → all three, sorted by closed_at desc
+    // Change to Last 7 days → all three, sorted by default (priority→id)
     select.value = '7';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
-    expect(closed_ids).toEqual(['C-3', 'C-2', 'C-1']);
+    expect(closed_ids).toEqual(['C-1', 'C-2', 'C-3']);
   });
 });

@@ -181,11 +181,12 @@ describe('views/board', () => {
     ).map((el) => el.textContent?.trim());
     expect(prog_ids).toEqual(['P-2', 'P-1']);
 
-    // Closed: closed_at desc
+    // Closed: default sort is most-severe (priority asc, then created_at asc);
+    // both C-1 and C-2 have no priority (default 2), no created_at, so sort by id
     const closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
-    expect(closed_ids).toEqual(['C-2', 'C-1']);
+    expect(closed_ids).toEqual(['C-1', 'C-2']);
 
     // Click navigates
     const first_ready = /** @type {HTMLElement|null} */ (
@@ -312,6 +313,214 @@ describe('views/board', () => {
       .querySelector('#closed-col .board-column__count')
       ?.getAttribute('aria-label');
     expect(closed_label).toBe('1 issue');
+  });
+
+  test('sort order selector re-orders cards across all columns', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues: [
+        {
+          id: 'R-1',
+          title: 'r1',
+          priority: 0,
+          created_at: new Date('2025-10-20T08:00:00.000Z').getTime(),
+          updated_at: new Date('2025-10-20T08:00:00.000Z').getTime(),
+          issue_type: 'bug'
+        },
+        {
+          id: 'R-2',
+          title: 'r2',
+          priority: 3,
+          created_at: new Date('2025-10-22T08:00:00.000Z').getTime(),
+          updated_at: new Date('2025-10-25T08:00:00.000Z').getTime(),
+          issue_type: 'task'
+        },
+        {
+          id: 'R-3',
+          title: 'r3',
+          priority: 1,
+          created_at: new Date('2025-10-21T08:00:00.000Z').getTime(),
+          updated_at: new Date('2025-10-21T08:00:00.000Z').getTime(),
+          issue_type: 'feature'
+        }
+      ]
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    /** @returns {string[]} */
+    const readyIds = () =>
+      Array.from(mount.querySelectorAll('#ready-col .board-card .mono')).map(
+        (el) => el.textContent?.trim() ?? ''
+      );
+
+    // Default: most-severe (priority asc)
+    expect(readyIds()).toEqual(['R-1', 'R-3', 'R-2']);
+
+    // Switch to recent-first (created_at desc)
+    const select = /** @type {HTMLSelectElement|null} */ (
+      mount.querySelector('#board-sort-order')
+    );
+    expect(select).not.toBeNull();
+    if (select) {
+      select.value = 'recent-first';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    expect(readyIds()).toEqual(['R-2', 'R-3', 'R-1']);
+
+    // Switch to oldest-first (created_at asc)
+    if (select) {
+      select.value = 'oldest-first';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    expect(readyIds()).toEqual(['R-1', 'R-3', 'R-2']);
+
+    // Switch to least-severe (priority desc)
+    if (select) {
+      select.value = 'least-severe';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    expect(readyIds()).toEqual(['R-2', 'R-3', 'R-1']);
+
+    // Switch to recently-updated (updated_at desc)
+    if (select) {
+      select.value = 'recently-updated';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    expect(readyIds()).toEqual(['R-2', 'R-3', 'R-1']);
+  });
+
+  test('persists sort order to store', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    /** @type {Record<string, any>} */
+    let stored = {};
+    const store = {
+      getState: () => ({ board: stored }),
+      /** @param {Record<string, any>} s */
+      setState(s) {
+        if (s.board) {
+          stored = { ...stored, ...s.board };
+        }
+      }
+    };
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues: [
+        {
+          id: 'R-1',
+          title: 'r1',
+          priority: 1,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          issue_type: 'task'
+        }
+      ]
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      store,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const select = /** @type {HTMLSelectElement|null} */ (
+      mount.querySelector('#board-sort-order')
+    );
+    expect(select).not.toBeNull();
+    if (select) {
+      select.value = 'recent-first';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    expect(stored.sort_order).toBe('recent-first');
+  });
+
+  test('restores sort order from store on load', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const store = {
+      getState: () => ({ board: { sort_order: 'oldest-first' } }),
+      setState() {}
+    };
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues: [
+        {
+          id: 'R-1',
+          title: 'r1',
+          priority: 1,
+          created_at: new Date('2025-10-22T08:00:00.000Z').getTime(),
+          updated_at: new Date('2025-10-22T08:00:00.000Z').getTime(),
+          issue_type: 'task'
+        },
+        {
+          id: 'R-2',
+          title: 'r2',
+          priority: 0,
+          created_at: new Date('2025-10-20T08:00:00.000Z').getTime(),
+          updated_at: new Date('2025-10-20T08:00:00.000Z').getTime(),
+          issue_type: 'bug'
+        }
+      ]
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      store,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    // With oldest-first, R-2 (Oct 20) should come before R-1 (Oct 22)
+    const ready_ids = Array.from(
+      mount.querySelectorAll('#ready-col .board-card .mono')
+    ).map((el) => el.textContent?.trim());
+    expect(ready_ids).toEqual(['R-2', 'R-1']);
+
+    // Verify the select shows the correct value
+    const select = /** @type {HTMLSelectElement|null} */ (
+      mount.querySelector('#board-sort-order')
+    );
+    expect(select?.value).toBe('oldest-first');
   });
 
   test('filters Ready to exclude items that are In Progress', async () => {

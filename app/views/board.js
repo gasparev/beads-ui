@@ -1,6 +1,10 @@
 import { html, render } from 'lit-html';
 import { createListSelectors } from '../data/list-selectors.js';
-import { cmpClosedDesc, cmpPriorityThenCreated } from '../data/sort.js';
+import {
+  SORT_ORDER_COMPARATORS,
+  SORT_ORDER_LABELS,
+  cmpPriorityThenCreated
+} from '../data/sort.js';
 import { createIssueIdRenderer } from '../utils/issue-id-renderer.js';
 import { debug } from '../utils/logging.js';
 import { createPriorityBadge } from '../utils/priority-badge.js';
@@ -80,6 +84,14 @@ export function createBoardView(
    * @type {'today'|'3'|'7'}
    */
   let closed_filter_mode = 'today';
+
+  /**
+   * Active sort order for all columns.
+   *
+   * @type {import('../data/sort.js').SortOrder}
+   */
+  let sort_order = 'most-severe';
+
   if (store) {
     try {
       const s = store.getState();
@@ -88,6 +100,13 @@ export function createBoardView(
       if (cf === 'today' || cf === '3' || cf === '7') {
         closed_filter_mode = /** @type {any} */ (cf);
       }
+      const so =
+        s && s.board
+          ? String(s.board.sort_order || 'most-severe')
+          : 'most-severe';
+      if (so in SORT_ORDER_COMPARATORS) {
+        sort_order = /** @type {import('../data/sort.js').SortOrder} */ (so);
+      }
     } catch {
       // ignore store init errors
     }
@@ -95,6 +114,24 @@ export function createBoardView(
 
   function template() {
     return html`
+      <div class="board-sort-bar">
+        <label class="board-sort-selector">
+          <span class="board-sort-selector__label">Sort by</span>
+          <select
+            id="board-sort-order"
+            aria-label="Sort order"
+            @change=${onSortOrderChange}
+          >
+            ${Object.entries(SORT_ORDER_LABELS).map(
+              ([key, label]) => html`
+                <option value=${key} ?selected=${sort_order === key}>
+                  ${label}
+                </option>
+              `
+            )}
+          </select>
+        </label>
+      </div>
       <div class="panel__body board-root">
         ${columnTemplate('Blocked', 'blocked-col', list_blocked)}
         ${columnTemplate('Ready', 'ready-col', list_ready)}
@@ -544,7 +581,7 @@ export function createBoardView(
       }
       return s >= since_ts;
     });
-    items.sort(cmpClosedDesc);
+    items.sort(SORT_ORDER_COMPARATORS[sort_order] ?? cmpPriorityThenCreated);
     list_closed = items;
   }
 
@@ -572,26 +609,60 @@ export function createBoardView(
   }
 
   /**
+   * Handle sort order change from the global selector.
+   *
+   * @param {Event} ev
+   */
+  function onSortOrderChange(ev) {
+    try {
+      const el = /** @type {HTMLSelectElement} */ (ev.target);
+      const v = String(el.value || 'most-severe');
+      if (v in SORT_ORDER_COMPARATORS) {
+        sort_order = /** @type {import('../data/sort.js').SortOrder} */ (v);
+      } else {
+        sort_order = 'most-severe';
+      }
+      log('sort order %s', sort_order);
+      if (store) {
+        try {
+          store.setState({ board: { sort_order } });
+        } catch {
+          // ignore store errors
+        }
+      }
+      refreshFromStores();
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
    * Compose lists from subscriptions + issues store and render.
    */
   function refreshFromStores() {
     try {
       if (selectors) {
+        const cmp =
+          SORT_ORDER_COMPARATORS[sort_order] ?? cmpPriorityThenCreated;
         const in_progress = selectors.selectBoardColumn(
           'tab:board:in-progress',
-          'in_progress'
+          'in_progress',
+          cmp
         );
         const blocked = selectors.selectBoardColumn(
           'tab:board:blocked',
-          'blocked'
+          'blocked',
+          cmp
         );
         const ready_raw = selectors.selectBoardColumn(
           'tab:board:ready',
-          'ready'
+          'ready',
+          cmp
         );
         const closed = selectors.selectBoardColumn(
           'tab:board:closed',
-          'closed'
+          'closed',
+          cmp
         );
 
         // Ready excludes items that are in progress
@@ -697,10 +768,12 @@ export function createBoardView(
           const in_progress_ids = new Set(in_prog.map((i) => i.id));
           ready = ready.filter((i) => !in_progress_ids.has(i.id));
 
-          // Sort as per column rules
-          ready.sort(cmpPriorityThenCreated);
-          blocked.sort(cmpPriorityThenCreated);
-          in_prog.sort(cmpPriorityThenCreated);
+          // Sort as per active sort order
+          const cmp =
+            SORT_ORDER_COMPARATORS[sort_order] ?? cmpPriorityThenCreated;
+          ready.sort(cmp);
+          blocked.sort(cmp);
+          in_prog.sort(cmp);
           list_ready = ready;
           list_blocked = blocked;
           list_in_progress = in_prog;
