@@ -75,6 +75,17 @@ export function createBoardView(
   let list_closed = [];
   /** @type {IssueLite[]} */
   let list_closed_raw = [];
+
+  // Unfiltered lists for label dropdown (so excluded labels remain visible)
+  /** @type {IssueLite[]} */
+  let list_ready_unfiltered = [];
+  /** @type {IssueLite[]} */
+  let list_blocked_unfiltered = [];
+  /** @type {IssueLite[]} */
+  let list_in_progress_unfiltered = [];
+  /** @type {IssueLite[]} */
+  let list_closed_unfiltered = [];
+
   // Centralized selection helpers
   const selectors = issueStores ? createListSelectors(issueStores) : null;
 
@@ -95,10 +106,18 @@ export function createBoardView(
   let sort_order = 'most-severe';
 
   /**
-   * Active label filters (multi-select).
-   * Shows issues that have ANY of the selected labels.
+   * @typedef {{
+   *   label: string,
+   *   mode: 'include' | 'exclude'
+   * }} LabelFilter
+   */
+
+  /**
+   * Active label filters (multi-select with include/exclude mode).
+   * Include filters: show issues with ANY included label (OR logic)
+   * Exclude filters: hide issues with ANY excluded label (AND logic)
    *
-   * @type {string[]}
+   * @type {LabelFilter[]}
    */
   let label_filters = [];
 
@@ -124,12 +143,31 @@ export function createBoardView(
       if (so in SORT_ORDER_COMPARATORS) {
         sort_order = /** @type {import('../data/sort.js').SortOrder} */ (so);
       }
-      // Normalize label_filters from store (handle legacy string → array migration)
+      // Normalize label_filters from store (handle legacy string → array → object[] migration)
       const lf = s && s.board && s.board.label_filters;
       if (Array.isArray(lf)) {
-        label_filters = lf;
+        label_filters = lf.map((item) => {
+          if (typeof item === 'string') {
+            // Legacy string format → convert to include filter
+            return { label: item, mode: 'include' };
+          }
+          if (
+            item &&
+            typeof item === 'object' &&
+            'label' in item &&
+            'mode' in item
+          ) {
+            // New object format
+            return {
+              label: String(item.label),
+              mode: item.mode === 'exclude' ? 'exclude' : 'include'
+            };
+          }
+          // Fallback for malformed entries
+          return { label: String(item), mode: 'include' };
+        });
       } else if (lf) {
-        label_filters = [String(lf)];
+        label_filters = [{ label: String(lf), mode: 'include' }];
       }
     } catch {
       // ignore store init errors
@@ -139,17 +177,17 @@ export function createBoardView(
   /**
    * Get display text for dropdown based on selected items.
    *
-   * @param {string[]} selected
+   * @param {LabelFilter[]} selected
    * @param {string} label
-   * @param {(v: string) => string} formatter
    * @returns {string}
    */
-  function getDropdownDisplayText(selected, label, formatter) {
+  function getDropdownDisplayText(selected, label) {
     if (selected.length === 0) {
       return `${label}: Any`;
     }
     if (selected.length === 1) {
-      return `${label}: ${formatter(selected[0])}`;
+      const mode_prefix = selected[0].mode === 'exclude' ? '−' : '';
+      return `${label}: ${mode_prefix}${selected[0].label}`;
     }
     return `${label} (${selected.length})`;
   }
@@ -175,7 +213,8 @@ export function createBoardView(
 
   /**
    * Apply label filter to issues.
-   * Shows issues that have ANY of the selected labels.
+   * 1. If include filters exist, show only issues with ANY included label (OR logic)
+   * 2. Then apply exclude filters to hide issues with ANY excluded label (AND logic)
    *
    * @param {IssueLite[]} issues
    * @returns {IssueLite[]}
@@ -184,31 +223,82 @@ export function createBoardView(
     if (label_filters.length === 0) {
       return issues;
     }
-    return issues.filter((issue) => {
-      if (!issue.labels || !Array.isArray(issue.labels)) {
-        return false;
-      }
-      // Issue matches if it has ANY of the selected labels
-      return issue.labels.some((label) => label_filters.includes(label));
-    });
+
+    const include_filters = label_filters
+      .filter((f) => f.mode === 'include')
+      .map((f) => f.label);
+    const exclude_filters = label_filters
+      .filter((f) => f.mode === 'exclude')
+      .map((f) => f.label);
+
+    let filtered = issues;
+
+    // Step 1: Apply include filters (OR logic)
+    if (include_filters.length > 0) {
+      filtered = filtered.filter((issue) => {
+        if (!issue.labels || !Array.isArray(issue.labels)) {
+          return false;
+        }
+        return issue.labels.some((label) => include_filters.includes(label));
+      });
+    }
+
+    // Step 2: Apply exclude filters (AND logic)
+    if (exclude_filters.length > 0) {
+      filtered = filtered.filter((issue) => {
+        if (!issue.labels || !Array.isArray(issue.labels)) {
+          // Issues without labels pass exclude filter
+          return true;
+        }
+        // Exclude if issue has ANY excluded label
+        return !issue.labels.some((label) => exclude_filters.includes(label));
+      });
+    }
+
+    return filtered;
   }
 
   /**
-   * Toggle a label in the label filter.
+   * Toggle a label in the label filter (add/remove).
    *
    * @param {string} label_name
    */
   function toggleLabelFilter(label_name) {
-    const idx = label_filters.indexOf(label_name);
-    if (idx >= 0) {
-      label_filters = label_filters.filter((l) => l !== label_name);
+    const existing_idx = label_filters.findIndex((f) => f.label === label_name);
+    if (existing_idx >= 0) {
+      // Remove filter
+      label_filters = label_filters.filter((f) => f.label !== label_name);
     } else {
-      label_filters = [...label_filters, label_name];
+      // Add filter with default mode 'include'
+      label_filters = [
+        ...label_filters,
+        { label: label_name, mode: 'include' }
+      ];
     }
     if (store) {
       store.setState({ board: { label_filters } });
     }
     refreshFromStores();
+  }
+
+  /**
+   * Toggle filter mode between include/exclude for a label.
+   *
+   * @param {string} label_name
+   */
+  function toggleLabelFilterMode(label_name) {
+    const existing = label_filters.find((f) => f.label === label_name);
+    if (existing) {
+      label_filters = label_filters.map((f) =>
+        f.label === label_name
+          ? { ...f, mode: f.mode === 'include' ? 'exclude' : 'include' }
+          : f
+      );
+      if (store) {
+        store.setState({ board: { label_filters } });
+      }
+      refreshFromStores();
+    }
   }
 
   /**
@@ -220,12 +310,12 @@ export function createBoardView(
   }
 
   function template() {
-    // Combine all issues from all columns to get all unique labels
-    const all_issues = [
-      ...list_ready,
-      ...list_blocked,
-      ...list_in_progress,
-      ...list_closed
+    // Use unfiltered lists to get all unique labels (so excluded labels remain visible in dropdown)
+    const all_issues_for_labels = [
+      ...list_ready_unfiltered,
+      ...list_blocked_unfiltered,
+      ...list_in_progress_unfiltered,
+      ...list_closed_unfiltered
     ];
 
     return html`
@@ -237,24 +327,46 @@ export function createBoardView(
             aria-label="Filter by labels"
             aria-expanded=${label_dropdown_open}
           >
-            ${getDropdownDisplayText(label_filters, 'Labels', (x) => x)}
+            ${getDropdownDisplayText(label_filters, 'Labels')}
             <span class="filter-dropdown__arrow">▾</span>
           </button>
           <div class="filter-dropdown__menu" role="menu">
-            ${getAllUniqueLabels(all_issues).map(
-              (label) => html`
-                <label class="filter-dropdown__option">
-                  <input
-                    type="checkbox"
-                    .checked=${label_filters.includes(label)}
-                    @change=${() => toggleLabelFilter(label)}
-                    role="menuitemcheckbox"
-                    aria-checked=${label_filters.includes(label)}
-                  />
-                  ${label}
-                </label>
-              `
-            )}
+            ${getAllUniqueLabels(all_issues_for_labels).map((label) => {
+              const filter = label_filters.find((f) => f.label === label);
+              const is_active = !!filter;
+              const mode = filter?.mode || 'include';
+
+              return html`
+                <div class="filter-dropdown__option">
+                  <label class="filter-dropdown__option-label">
+                    <input
+                      type="checkbox"
+                      .checked=${is_active}
+                      @change=${() => toggleLabelFilter(label)}
+                      role="menuitemcheckbox"
+                      aria-checked=${is_active}
+                    />
+                    <span class="filter-dropdown__option-text">${label}</span>
+                  </label>
+                  ${is_active
+                    ? html`
+                        <button
+                          class="filter-dropdown__mode-toggle"
+                          @click=${() => toggleLabelFilterMode(label)}
+                          aria-label=${mode === 'include'
+                            ? 'Include mode (click to exclude)'
+                            : 'Exclude mode (click to include)'}
+                          title=${mode === 'include'
+                            ? 'Include mode (click to exclude)'
+                            : 'Exclude mode (click to include)'}
+                        >
+                          ${mode === 'include' ? '+' : '−'}
+                        </button>
+                      `
+                    : ''}
+                </div>
+              `;
+            })}
           </div>
         </div>
         <label class="board-sort-selector">
@@ -812,6 +924,12 @@ export function createBoardView(
         /** @type {Set<string>} */
         const in_prog_ids = new Set(in_progress.map((i) => i.id));
         const ready = ready_raw.filter((i) => !in_prog_ids.has(i.id));
+
+        // Store unfiltered lists for label dropdown (so excluded labels remain visible)
+        list_ready_unfiltered = ready;
+        list_blocked_unfiltered = blocked;
+        list_in_progress_unfiltered = in_progress;
+        list_closed_unfiltered = closed;
 
         // Apply label filter to all columns
         list_ready = applyLabelFilter(ready);

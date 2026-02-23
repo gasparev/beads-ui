@@ -852,23 +852,32 @@ describe('views/board', () => {
 
     const issues = [
       {
-        id: 'B-1',
-        title: 'many labels',
+        id: 'T-1',
+        title: 'has 2 labels',
         priority: 1,
-        labels: ['label1', 'label2', 'label3', 'label4', 'label5'],
+        labels: ['frontend', 'urgent'],
         status: 'open',
         created_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
         updated_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
         issue_type: 'task'
       },
       {
-        id: 'B-2',
-        title: 'few labels',
+        id: 'T-2',
+        title: 'has 5 labels',
         priority: 1,
-        labels: ['label1'],
+        labels: ['a', 'b', 'c', 'd', 'e'],
         status: 'open',
         created_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
         updated_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'T-3',
+        title: 'no labels',
+        priority: 1,
+        status: 'open',
+        created_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
         issue_type: 'task'
       }
     ];
@@ -892,31 +901,184 @@ describe('views/board', () => {
 
     await view.load();
 
-    const cards = Array.from(mount.querySelectorAll('#ready-col .board-card'));
-
-    // Find the card with many labels (B-1)
-    const many_labels_card = cards.find((card) =>
-      card.querySelector('.mono')?.textContent?.includes('B-1')
+    const t1_card = /** @type {HTMLElement|null} */ (
+      mount.querySelector('[data-issue-id="T-1"]')
     );
-    expect(many_labels_card).toBeDefined();
+    const t1_labels = t1_card
+      ? Array.from(t1_card.querySelectorAll('.label-badge')).map((el) =>
+          el.textContent?.trim()
+        )
+      : [];
+    expect(t1_labels).toEqual(['frontend', 'urgent']);
 
-    // Should have 3 visible badges + "..." indicator
-    const first_card_badges =
-      many_labels_card?.querySelectorAll('.label-badge');
-    expect(first_card_badges?.length).toBe(4); // 3 labels + "+2" indicator
-
-    const more_badge = many_labels_card?.querySelector('.label-badge--more');
-    expect(more_badge?.textContent?.trim()).toBe('+2');
-
-    // Find the card with few labels (B-2)
-    const few_labels_card = cards.find((card) =>
-      card.querySelector('.mono')?.textContent?.includes('B-2')
+    const t2_card = /** @type {HTMLElement|null} */ (
+      mount.querySelector('[data-issue-id="T-2"]')
     );
-    expect(few_labels_card).toBeDefined();
+    const t2_labels = t2_card
+      ? Array.from(t2_card.querySelectorAll('.label-badge')).map((el) =>
+          el.textContent?.trim()
+        )
+      : [];
+    expect(t2_labels).toEqual(['a', 'b', 'c', '+2']);
 
-    // Should have 1 badge
-    const second_card_badges =
-      few_labels_card?.querySelectorAll('.label-badge');
-    expect(second_card_badges?.length).toBe(1);
+    const t3_card = /** @type {HTMLElement|null} */ (
+      mount.querySelector('[data-issue-id="T-3"]')
+    );
+    const t3_labels = t3_card
+      ? Array.from(t3_card.querySelectorAll('.label-badge'))
+      : [];
+    expect(t3_labels).toHaveLength(0);
+  });
+
+  test('excludes issues with excluded labels', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issues = [
+      {
+        id: 'E-1',
+        title: 'has bug label',
+        priority: 1,
+        labels: ['bug'],
+        status: 'open',
+        created_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'E-2',
+        title: 'has feature label',
+        priority: 1,
+        labels: ['feature'],
+        status: 'open',
+        created_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'E-3',
+        title: 'no labels',
+        priority: 1,
+        status: 'open',
+        created_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        issue_type: 'task'
+      }
+    ];
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues
+    });
+
+    const store = {
+      getState() {
+        return {
+          board: { label_filters: [{ label: 'bug', mode: 'exclude' }] }
+        };
+      },
+      setState() {}
+    };
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      store,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const ready_ids = Array.from(
+      mount.querySelectorAll('#ready-col .board-card .mono')
+    ).map((el) => el.textContent?.trim());
+
+    // Should exclude E-1 (has 'bug' label), show E-2 and E-3
+    expect(ready_ids.sort()).toEqual(['E-2', 'E-3'].sort());
+  });
+
+  test('applies include filters first, then exclude filters', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issues = [
+      {
+        id: 'F-1',
+        title: 'frontend only',
+        priority: 1,
+        labels: ['frontend'],
+        status: 'open',
+        created_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'F-2',
+        title: 'frontend + bug',
+        priority: 1,
+        labels: ['frontend', 'bug'],
+        status: 'open',
+        created_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'F-3',
+        title: 'backend only',
+        priority: 1,
+        labels: ['backend'],
+        status: 'open',
+        created_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        issue_type: 'task'
+      }
+    ];
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues
+    });
+
+    const store = {
+      getState() {
+        return {
+          board: {
+            label_filters: [
+              { label: 'frontend', mode: 'include' },
+              { label: 'bug', mode: 'exclude' }
+            ]
+          }
+        };
+      },
+      setState() {}
+    };
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      store,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const ready_ids = Array.from(
+      mount.querySelectorAll('#ready-col .board-card .mono')
+    ).map((el) => el.textContent?.trim());
+
+    // Include: F-1, F-2 (have 'frontend')
+    // Exclude: F-2 (has 'bug')
+    // Result: F-1 only
+    expect(ready_ids).toEqual(['F-1']);
   });
 });

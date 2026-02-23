@@ -30,7 +30,7 @@ describe('list adapters for subscription types', () => {
 
   test('mapSubscriptionToBdArgs returns args for ready-issues', () => {
     const args = mapSubscriptionToBdArgs({ type: 'ready-issues' });
-    expect(args).toEqual(['ready', '--limit', '1000', '--json']);
+    expect(args).toEqual(['list', '--json', '--ready', '--limit', '1000']);
   });
 
   test('mapSubscriptionToBdArgs returns args for in-progress-issues', () => {
@@ -97,6 +97,39 @@ describe('list adapters for subscription types', () => {
         closed_at: null
       });
     }
+  });
+
+  test('ready issues include labels from list output', async () => {
+    /** @type {import('vitest').Mock} */ (runBdJson).mockResolvedValue({
+      code: 0,
+      stdoutJson: [
+        {
+          id: 'A-1',
+          labels: ['frontend'],
+          updated_at: '2024-01-01T00:00:00.000Z',
+          closed_at: null
+        },
+        {
+          id: 'A-2',
+          labels: ['backend', 'urgent'],
+          updated_at: '2024-01-01T00:00:01.000Z',
+          closed_at: null
+        }
+      ]
+    });
+
+    const res = await fetchListForSubscription({ type: 'ready-issues' });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.items).toHaveLength(2);
+      expect(res.items[0].labels).toEqual(['frontend']);
+      expect(res.items[1].labels).toEqual(['backend', 'urgent']);
+    }
+    expect(runBdJson).toHaveBeenCalledWith(
+      ['list', '--json', '--ready', '--limit', '1000'],
+      { cwd: undefined }
+    );
   });
 
   test('filters tombstoned epics', async () => {

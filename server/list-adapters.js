@@ -23,7 +23,7 @@ export function mapSubscriptionToBdArgs(spec) {
       return ['blocked', '--json'];
     }
     case 'ready-issues': {
-      return ['ready', '--limit', '1000', '--json'];
+      return ['list', '--json', '--ready', '--limit', '1000'];
     }
     case 'in-progress-issues': {
       return ['list', '--json', '--status', 'in_progress'];
