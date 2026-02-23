@@ -103,7 +103,7 @@ export function createBoardView(
    *
    * @type {import('../data/sort.js').SortOrder}
    */
-  let sort_order = 'most-severe';
+  let sort_order = 'recent-first';
 
   /**
    * @typedef {{
@@ -138,8 +138,8 @@ export function createBoardView(
       }
       const so =
         s && s.board
-          ? String(s.board.sort_order || 'most-severe')
-          : 'most-severe';
+          ? String(s.board.sort_order || 'recent-first')
+          : 'recent-first';
       if (so in SORT_ORDER_COMPARATORS) {
         sort_order = /** @type {import('../data/sort.js').SortOrder} */ (so);
       }
