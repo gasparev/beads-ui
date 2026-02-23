@@ -6,6 +6,7 @@ import {
   cmpPriorityThenCreated
 } from '../data/sort.js';
 import { createIssueIdRenderer } from '../utils/issue-id-renderer.js';
+import { createLabelBadges } from '../utils/label-badge.js';
 import { debug } from '../utils/logging.js';
 import { createPriorityBadge } from '../utils/priority-badge.js';
 import { showToast } from '../utils/toast.js';
@@ -20,7 +21,8 @@ import { createTypeBadge } from '../utils/type-badge.js';
  *   issue_type?: string,
  *   created_at?: number,
  *   updated_at?: number,
- *   closed_at?: number
+ *   closed_at?: number,
+ *   labels?: string[]
  * }} IssueLite
  */
 
@@ -92,6 +94,21 @@ export function createBoardView(
    */
   let sort_order = 'most-severe';
 
+  /**
+   * Active label filters (multi-select).
+   * Shows issues that have ANY of the selected labels.
+   *
+   * @type {string[]}
+   */
+  let label_filters = [];
+
+  /**
+   * Label filter dropdown open state.
+   *
+   * @type {boolean}
+   */
+  let label_dropdown_open = false;
+
   if (store) {
     try {
       const s = store.getState();
@@ -107,14 +124,139 @@ export function createBoardView(
       if (so in SORT_ORDER_COMPARATORS) {
         sort_order = /** @type {import('../data/sort.js').SortOrder} */ (so);
       }
+      // Normalize label_filters from store (handle legacy string → array migration)
+      const lf = s && s.board && s.board.label_filters;
+      if (Array.isArray(lf)) {
+        label_filters = lf;
+      } else if (lf) {
+        label_filters = [String(lf)];
+      }
     } catch {
       // ignore store init errors
     }
   }
 
+  /**
+   * Get display text for dropdown based on selected items.
+   *
+   * @param {string[]} selected
+   * @param {string} label
+   * @param {(v: string) => string} formatter
+   * @returns {string}
+   */
+  function getDropdownDisplayText(selected, label, formatter) {
+    if (selected.length === 0) {
+      return `${label}: Any`;
+    }
+    if (selected.length === 1) {
+      return `${label}: ${formatter(selected[0])}`;
+    }
+    return `${label} (${selected.length})`;
+  }
+
+  /**
+   * Get all unique labels from all issues across all columns.
+   *
+   * @param {IssueLite[]} issues
+   * @returns {string[]}
+   */
+  function getAllUniqueLabels(issues) {
+    /** @type {Set<string>} */
+    const label_set = new Set();
+    for (const issue of issues) {
+      if (issue.labels && Array.isArray(issue.labels)) {
+        for (const label of issue.labels) {
+          label_set.add(label);
+        }
+      }
+    }
+    return Array.from(label_set).sort();
+  }
+
+  /**
+   * Apply label filter to issues.
+   * Shows issues that have ANY of the selected labels.
+   *
+   * @param {IssueLite[]} issues
+   * @returns {IssueLite[]}
+   */
+  function applyLabelFilter(issues) {
+    if (label_filters.length === 0) {
+      return issues;
+    }
+    return issues.filter((issue) => {
+      if (!issue.labels || !Array.isArray(issue.labels)) {
+        return false;
+      }
+      // Issue matches if it has ANY of the selected labels
+      return issue.labels.some((label) => label_filters.includes(label));
+    });
+  }
+
+  /**
+   * Toggle a label in the label filter.
+   *
+   * @param {string} label_name
+   */
+  function toggleLabelFilter(label_name) {
+    const idx = label_filters.indexOf(label_name);
+    if (idx >= 0) {
+      label_filters = label_filters.filter((l) => l !== label_name);
+    } else {
+      label_filters = [...label_filters, label_name];
+    }
+    if (store) {
+      store.setState({ board: { label_filters } });
+    }
+    refreshFromStores();
+  }
+
+  /**
+   * Toggle label dropdown open/closed state.
+   */
+  function toggleLabelDropdown() {
+    label_dropdown_open = !label_dropdown_open;
+    doRender();
+  }
+
   function template() {
+    // Combine all issues from all columns to get all unique labels
+    const all_issues = [
+      ...list_ready,
+      ...list_blocked,
+      ...list_in_progress,
+      ...list_closed
+    ];
+
     return html`
       <div class="board-sort-bar">
+        <div class="filter-dropdown ${label_dropdown_open ? 'is-open' : ''}">
+          <button
+            class="filter-dropdown__trigger"
+            @click=${toggleLabelDropdown}
+            aria-label="Filter by labels"
+            aria-expanded=${label_dropdown_open}
+          >
+            ${getDropdownDisplayText(label_filters, 'Labels', (x) => x)}
+            <span class="filter-dropdown__arrow">▾</span>
+          </button>
+          <div class="filter-dropdown__menu" role="menu">
+            ${getAllUniqueLabels(all_issues).map(
+              (label) => html`
+                <label class="filter-dropdown__option">
+                  <input
+                    type="checkbox"
+                    .checked=${label_filters.includes(label)}
+                    @change=${() => toggleLabelFilter(label)}
+                    role="menuitemcheckbox"
+                    aria-checked=${label_filters.includes(label)}
+                  />
+                  ${label}
+                </label>
+              `
+            )}
+          </div>
+        </div>
         <label class="board-sort-selector">
           <span class="board-sort-selector__label">Sort by</span>
           <select
@@ -218,6 +360,7 @@ export function createBoardView(
         </div>
         <div class="board-card__meta">
           ${createTypeBadge(it.issue_type)} ${createPriorityBadge(it.priority)}
+          ${createLabelBadges(it.labels)}
           ${createIssueIdRenderer(it.id, { class_name: 'mono' })}
         </div>
       </article>
@@ -670,10 +813,11 @@ export function createBoardView(
         const in_prog_ids = new Set(in_progress.map((i) => i.id));
         const ready = ready_raw.filter((i) => !in_prog_ids.has(i.id));
 
-        list_ready = ready;
-        list_blocked = blocked;
-        list_in_progress = in_progress;
-        list_closed_raw = closed;
+        // Apply label filter to all columns
+        list_ready = applyLabelFilter(ready);
+        list_blocked = applyLabelFilter(blocked);
+        list_in_progress = applyLabelFilter(in_progress);
+        list_closed_raw = applyLabelFilter(closed);
       }
       applyClosedFilter();
       doRender();

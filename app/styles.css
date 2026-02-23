@@ -582,6 +582,41 @@ button:disabled {
   color: var(--badge-fg-chore);
 }
 
+/* Label badge */
+.label-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--badge-radius);
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: middle;
+  user-select: none;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  /* Background and text colors are set inline via JavaScript hash */
+}
+
+.label-badge + .label-badge {
+  margin-left: 4px;
+}
+
+.label-badge[title] {
+  cursor: default;
+}
+
+.label-badge--more {
+  background: color-mix(
+    in srgb,
+    var(--text-color) 15%,
+    var(--panel-bg)
+  ) !important;
+  color: var(--text-color) !important;
+  opacity: 0.75;
+  font-size: 10px;
+  padding: 2px 6px;
+}
+
 /* Generic badge base (shared look) */
 .badge,
 .status-badge,

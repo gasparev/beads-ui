@@ -582,4 +582,341 @@ describe('views/board', () => {
     ).map((el) => el.textContent?.trim());
     expect(prog_ids).toEqual(['X-2']);
   });
+
+  test('applies label filter correctly with multi-select OR logic', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issues = [
+      {
+        id: 'L-1',
+        title: 'labeled frontend',
+        priority: 1,
+        labels: ['frontend'],
+        status: 'open',
+        created_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'L-2',
+        title: 'labeled backend',
+        priority: 1,
+        labels: ['backend'],
+        status: 'open',
+        created_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'L-3',
+        title: 'labeled both',
+        priority: 1,
+        labels: ['frontend', 'backend'],
+        status: 'open',
+        created_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'L-4',
+        title: 'no labels',
+        priority: 1,
+        status: 'open',
+        created_at: new Date('2025-10-23T07:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T07:00:00.000Z').getTime(),
+        issue_type: 'task'
+      }
+    ];
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues
+    });
+
+    const store = {
+      getState() {
+        return { board: { label_filters: ['frontend'] } };
+      },
+      setState() {}
+    };
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      store,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const ready_ids = Array.from(
+      mount.querySelectorAll('#ready-col .board-card .mono')
+    ).map((el) => el.textContent?.trim());
+
+    // Should show L-1 and L-3 (both have 'frontend' label)
+    expect(ready_ids.sort()).toEqual(['L-1', 'L-3'].sort());
+  });
+
+  test('shows all issues when no labels selected', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issues = [
+      {
+        id: 'A-1',
+        title: 'a1',
+        priority: 1,
+        labels: ['test'],
+        status: 'open',
+        created_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'A-2',
+        title: 'a2',
+        priority: 1,
+        status: 'open',
+        created_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        issue_type: 'task'
+      }
+    ];
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const ready_ids = Array.from(
+      mount.querySelectorAll('#ready-col .board-card .mono')
+    ).map((el) => el.textContent?.trim());
+
+    expect(ready_ids.sort()).toEqual(['A-1', 'A-2'].sort());
+  });
+
+  test('filters issues with ANY selected label (multi-select)', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issues = [
+      {
+        id: 'M-1',
+        title: 'm1',
+        priority: 1,
+        labels: ['urgent'],
+        status: 'open',
+        created_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'M-2',
+        title: 'm2',
+        priority: 1,
+        labels: ['bug'],
+        status: 'open',
+        created_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'M-3',
+        title: 'm3',
+        priority: 1,
+        labels: ['feature'],
+        status: 'open',
+        created_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T08:00:00.000Z').getTime(),
+        issue_type: 'task'
+      }
+    ];
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues
+    });
+
+    const store = {
+      getState() {
+        return { board: { label_filters: ['urgent', 'bug'] } };
+      },
+      setState() {}
+    };
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      store,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const ready_ids = Array.from(
+      mount.querySelectorAll('#ready-col .board-card .mono')
+    ).map((el) => el.textContent?.trim());
+
+    // Should show M-1 and M-2 (have 'urgent' or 'bug')
+    expect(ready_ids.sort()).toEqual(['M-1', 'M-2'].sort());
+  });
+
+  test('handles issues without labels field gracefully', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issues = [
+      {
+        id: 'N-1',
+        title: 'n1',
+        priority: 1,
+        labels: ['test'],
+        status: 'open',
+        created_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'N-2',
+        title: 'n2 without labels',
+        priority: 1,
+        status: 'open',
+        created_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        issue_type: 'task'
+      }
+    ];
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues
+    });
+
+    const store = {
+      getState() {
+        return { board: { label_filters: ['test'] } };
+      },
+      setState() {}
+    };
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      store,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const ready_ids = Array.from(
+      mount.querySelectorAll('#ready-col .board-card .mono')
+    ).map((el) => el.textContent?.trim());
+
+    // Should only show N-1 (has label), N-2 is filtered out
+    expect(ready_ids).toEqual(['N-1']);
+  });
+
+  test('displays label badges on cards with max 3 labels', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issues = [
+      {
+        id: 'B-1',
+        title: 'many labels',
+        priority: 1,
+        labels: ['label1', 'label2', 'label3', 'label4', 'label5'],
+        status: 'open',
+        created_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T10:00:00.000Z').getTime(),
+        issue_type: 'task'
+      },
+      {
+        id: 'B-2',
+        title: 'few labels',
+        priority: 1,
+        labels: ['label1'],
+        status: 'open',
+        created_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        updated_at: new Date('2025-10-23T09:00:00.000Z').getTime(),
+        issue_type: 'task'
+      }
+    ];
+
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const cards = Array.from(mount.querySelectorAll('#ready-col .board-card'));
+
+    // Find the card with many labels (B-1)
+    const many_labels_card = cards.find((card) =>
+      card.querySelector('.mono')?.textContent?.includes('B-1')
+    );
+    expect(many_labels_card).toBeDefined();
+
+    // Should have 3 visible badges + "..." indicator
+    const first_card_badges =
+      many_labels_card?.querySelectorAll('.label-badge');
+    expect(first_card_badges?.length).toBe(4); // 3 labels + "+2" indicator
+
+    const more_badge = many_labels_card?.querySelector('.label-badge--more');
+    expect(more_badge?.textContent?.trim()).toBe('+2');
+
+    // Find the card with few labels (B-2)
+    const few_labels_card = cards.find((card) =>
+      card.querySelector('.mono')?.textContent?.includes('B-2')
+    );
+    expect(few_labels_card).toBeDefined();
+
+    // Should have 1 badge
+    const second_card_badges =
+      few_labels_card?.querySelectorAll('.label-badge');
+    expect(second_card_badges?.length).toBe(1);
+  });
 });
