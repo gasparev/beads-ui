@@ -29,6 +29,10 @@ function makeFakeProc(stdoutText, stderrText, code) {
   // runBd serializes via a promise queue, so spawn is called inside a
   // microtask — the old queueMicrotask() approach fired before spawn ran.
   const origOn = cp.on.bind(cp);
+  /**
+   * @param {string | symbol} event
+   * @param {(...args: unknown[]) => void} fn
+   */
   cp.on = (event, fn) => {
     origOn(event, fn);
     if (event === 'close') {

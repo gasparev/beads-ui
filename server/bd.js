@@ -186,6 +186,10 @@ export function _resetQueue() {
   _queue = Promise.resolve();
 }
 
+/**
+ * @param {string[]} args
+ * @param {{ cwd?: string, env?: Record<string, string | undefined>, timeout_ms?: number }} [options]
+ */
 export async function runBdJson(args, options = {}) {
   const result = await runBd(args, options);
   if (result.code !== 0) {

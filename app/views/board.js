@@ -43,8 +43,9 @@ const COLUMN_STATUS_MAP = {
  * Push-only: derives items from per-subscription stores.
  *
  * Sorting rules:
- * - Ready/Blocked/In progress: priority asc, then created_at asc.
- * - Closed: closed_at desc.
+ * - Default sort is recent-first across columns.
+ * - Users can switch to severity, oldest-first, or recently-updated sorting.
+ * - Closed issues are additionally filtered by closed_at time window.
  *
  * @param {HTMLElement} mount_element
  * @param {unknown} _data - Unused (legacy param retained for call-compat)

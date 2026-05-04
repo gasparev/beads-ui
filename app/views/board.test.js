@@ -163,26 +163,23 @@ describe('views/board', () => {
 
     await view.load();
 
-    // Blocked: priority asc, then created_at desc for equal priority
+    // Default sort is recent-first across columns.
     const blocked_ids = Array.from(
       mount.querySelectorAll('#blocked-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
-    expect(blocked_ids).toEqual(['B-1', 'B-2']);
+    expect(blocked_ids).toEqual(['B-2', 'B-1']);
 
-    // Ready: priority asc, then created_at asc for equal priority
     const ready_ids = Array.from(
       mount.querySelectorAll('#ready-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
-    expect(ready_ids).toEqual(['R-1', 'R-2', 'R-3']);
+    expect(ready_ids).toEqual(['R-3', 'R-1', 'R-2']);
 
-    // In progress: priority asc (default), then created_at asc
     const prog_ids = Array.from(
       mount.querySelectorAll('#in-progress-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
-    expect(prog_ids).toEqual(['P-2', 'P-1']);
+    expect(prog_ids).toEqual(['P-1', 'P-2']);
 
-    // Closed: default sort is most-severe (priority asc, then created_at asc);
-    // both C-1 and C-2 have no priority (default 2), no created_at, so sort by id
+    // C-1 and C-2 have no created_at, so the recent-first tie-breaker is id.
     const closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card .mono')
     ).map((el) => el.textContent?.trim());
@@ -193,7 +190,7 @@ describe('views/board', () => {
       mount.querySelector('#ready-col .board-card')
     );
     first_ready?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(navigations[0]).toBe('R-1');
+    expect(navigations[0]).toBe('R-3');
   });
 
   test('shows column count badges next to titles', async () => {
@@ -369,8 +366,8 @@ describe('views/board', () => {
         (el) => el.textContent?.trim() ?? ''
       );
 
-    // Default: most-severe (priority asc)
-    expect(readyIds()).toEqual(['R-1', 'R-3', 'R-2']);
+    // Default: recent-first (created_at desc)
+    expect(readyIds()).toEqual(['R-2', 'R-3', 'R-1']);
 
     // Switch to recent-first (created_at desc)
     const select = /** @type {HTMLSelectElement|null} */ (

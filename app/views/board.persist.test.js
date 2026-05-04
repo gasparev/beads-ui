@@ -104,7 +104,7 @@ describe('views/board persisted closed filter via store', () => {
     );
     await view.load();
 
-    // With persisted '7' days, B and C visible (A is 8 days old), sorted by default (priority→id)
+    // With persisted '7' days, B and C visible (A is 8 days old), sorted recent-first by created_at.
     let closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card')
     ).map((el) => el.getAttribute('data-issue-id'));
@@ -121,7 +121,7 @@ describe('views/board persisted closed filter via store', () => {
     select.dispatchEvent(new Event('change', { bubbles: true }));
     expect(store.getState().board.closed_filter).toBe('3');
 
-    // Now still B and C visible (both within 3 days), sorted by default (priority→id)
+    // Now still B and C visible (both within 3 days), sorted recent-first by created_at.
     closed_ids = Array.from(
       mount.querySelectorAll('#closed-col .board-card')
     ).map((el) => el.getAttribute('data-issue-id'));
