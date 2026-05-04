@@ -523,6 +523,250 @@ describe('views/board', () => {
     expect(select?.value).toBe('oldest-first');
   });
 
+  test('moves card after successful drop status update', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const now = Date.now();
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:in-progress').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:in-progress',
+      revision: 1,
+      issues: [
+        {
+          id: 'P-1',
+          title: 'progress 1',
+          status: 'in_progress',
+          created_at: now - 1000,
+          updated_at: now - 1000,
+          issue_type: 'task'
+        }
+      ]
+    });
+    issueStores.getStore('tab:board:closed').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:closed',
+      revision: 1,
+      issues: []
+    });
+
+    /** @type {Array<{ type: string, payload: any }>} */
+    const sent = [];
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores,
+      async (type, payload) => {
+        sent.push({ type, payload });
+        return {
+          id: 'P-1',
+          title: 'progress 1',
+          status: 'closed',
+          created_at: new Date(now - 1000).toISOString(),
+          updated_at: new Date(now).toISOString(),
+          closed_at: new Date(now).toISOString(),
+          issue_type: 'task'
+        };
+      }
+    );
+    await view.load();
+
+    const drop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, 'dataTransfer', {
+      value: { getData: () => 'P-1' }
+    });
+    mount.querySelector('#closed-col .board-column__body')?.dispatchEvent(drop);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sent).toEqual([
+      { type: 'update-status', payload: { id: 'P-1', status: 'closed' } }
+    ]);
+    expect(mount.querySelector('#in-progress-col [data-issue-id="P-1"]')).toBe(
+      null
+    );
+    expect(mount.querySelector('#closed-col [data-issue-id="P-1"]')).not.toBe(
+      null
+    );
+  });
+
+  test('keeps moved card in target column across unrelated store refresh', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const now = Date.now();
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:in-progress').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:in-progress',
+      revision: 1,
+      issues: [
+        {
+          id: 'P-1',
+          title: 'progress 1',
+          status: 'in_progress',
+          created_at: now - 1000,
+          updated_at: now - 1000,
+          issue_type: 'task'
+        }
+      ]
+    });
+    issueStores.getStore('tab:board:closed').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:closed',
+      revision: 1,
+      issues: []
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores,
+      async () => ({
+        id: 'P-1',
+        title: 'progress 1',
+        status: 'closed',
+        created_at: new Date(now - 1000).toISOString(),
+        updated_at: new Date(now).toISOString(),
+        closed_at: new Date(now).toISOString(),
+        issue_type: 'task'
+      })
+    );
+    await view.load();
+
+    const drop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, 'dataTransfer', {
+      value: { getData: () => 'P-1' }
+    });
+    mount.querySelector('#closed-col .board-column__body')?.dispatchEvent(drop);
+    await Promise.resolve();
+    await Promise.resolve();
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues: [
+        {
+          id: 'R-1',
+          title: 'ready 1',
+          status: 'open',
+          created_at: now,
+          updated_at: now,
+          issue_type: 'task'
+        }
+      ]
+    });
+
+    expect(mount.querySelector('#in-progress-col [data-issue-id="P-1"]')).toBe(
+      null
+    );
+    expect(mount.querySelector('#closed-col [data-issue-id="P-1"]')).not.toBe(
+      null
+    );
+  });
+
+  test('keeps moved card suppressed until source subscription catches up', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const now = Date.now();
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:in-progress').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:in-progress',
+      revision: 1,
+      issues: [
+        {
+          id: 'P-1',
+          title: 'progress 1',
+          status: 'in_progress',
+          created_at: now - 1000,
+          updated_at: now - 1000,
+          issue_type: 'task'
+        }
+      ]
+    });
+    issueStores.getStore('tab:board:closed').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:closed',
+      revision: 1,
+      issues: []
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores,
+      async () => ({
+        id: 'P-1',
+        title: 'progress 1',
+        status: 'closed',
+        created_at: new Date(now - 1000).toISOString(),
+        updated_at: new Date(now).toISOString(),
+        closed_at: new Date(now).toISOString(),
+        issue_type: 'task'
+      })
+    );
+    await view.load();
+
+    const drop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, 'dataTransfer', {
+      value: { getData: () => 'P-1' }
+    });
+    mount.querySelector('#closed-col .board-column__body')?.dispatchEvent(drop);
+    await Promise.resolve();
+    await Promise.resolve();
+    issueStores.getStore('tab:board:closed').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:closed',
+      revision: 2,
+      issues: [
+        {
+          id: 'P-1',
+          title: 'progress 1',
+          status: 'closed',
+          created_at: now - 1000,
+          updated_at: now,
+          closed_at: now,
+          issue_type: 'task'
+        }
+      ]
+    });
+    issueStores.getStore('tab:board:ready').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:ready',
+      revision: 1,
+      issues: [
+        {
+          id: 'R-1',
+          title: 'ready 1',
+          status: 'open',
+          created_at: now,
+          updated_at: now,
+          issue_type: 'task'
+        }
+      ]
+    });
+
+    expect(mount.querySelector('#in-progress-col [data-issue-id="P-1"]')).toBe(
+      null
+    );
+    expect(mount.querySelectorAll('[data-issue-id="P-1"]')).toHaveLength(1);
+    expect(mount.querySelector('#closed-col [data-issue-id="P-1"]')).not.toBe(
+      null
+    );
+  });
+
   test('filters Ready to exclude items that are In Progress', async () => {
     document.body.innerHTML = '<div id="m"></div>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('m'));

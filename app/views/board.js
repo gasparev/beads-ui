@@ -128,6 +128,13 @@ export function createBoardView(
    */
   let label_dropdown_open = false;
 
+  /**
+   * Locally accepted status moves awaiting authoritative subscription updates.
+   *
+   * @type {Map<string, { issue: IssueLite, target_column_id: string }>}
+   */
+  const optimistic_status_moves = new Map();
+
   if (store) {
     try {
       const s = store.getState();
@@ -212,9 +219,66 @@ export function createBoardView(
   }
 
   /**
+   * Parse a bd timestamp value into epoch milliseconds.
+   *
+   * @param {unknown} value
+   * @returns {number | null}
+   */
+  function parseIssueTimestamp(value) {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    }
+    return null;
+  }
+
+  /**
+   * Normalize an updated issue payload from a mutation reply for local board use.
+   *
+   * @param {unknown} value
+   * @param {IssueLite | null} fallback_issue
+   * @param {string} issue_id
+   * @param {'open'|'in_progress'|'closed'} new_status
+   * @returns {IssueLite}
+   */
+  function normalizeIssueLite(value, fallback_issue, issue_id, new_status) {
+    const payload =
+      value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    /** @type {IssueLite} */
+    const issue = {
+      ...(fallback_issue || {}),
+      .../** @type {Record<string, unknown>} */ (payload),
+      id: issue_id,
+      status: new_status
+    };
+
+    const created_at = parseIssueTimestamp(issue.created_at);
+    if (created_at !== null) {
+      issue.created_at = created_at;
+    }
+    const updated_at = parseIssueTimestamp(issue.updated_at);
+    issue.updated_at = updated_at !== null ? updated_at : Date.now();
+    const closed_at = parseIssueTimestamp(issue.closed_at);
+    if (new_status === 'closed') {
+      issue.closed_at = closed_at !== null ? closed_at : Date.now();
+    } else {
+      delete issue.closed_at;
+    }
+
+    return issue;
+  }
+
+  /**
    * Apply label filter to issues.
-   * 1. If include filters exist, show only issues with ANY included label (OR logic)
-   * 2. Then apply exclude filters to hide issues with ANY excluded label (AND logic)
+   * If include filters exist, show issues with any included label.
+   * Then apply exclude filters to hide issues with any excluded label.
    *
    * @param {IssueLite[]} issues
    * @returns {IssueLite[]}
@@ -256,6 +320,188 @@ export function createBoardView(
     }
 
     return filtered;
+  }
+
+  /**
+   * Find an issue in the current unfiltered board lists.
+   *
+   * @param {string} issue_id
+   * @returns {IssueLite | null}
+   */
+  function findLocalIssue(issue_id) {
+    const lists = [
+      list_ready_unfiltered,
+      list_blocked_unfiltered,
+      list_in_progress_unfiltered,
+      list_closed_unfiltered,
+      list_ready,
+      list_blocked,
+      list_in_progress,
+      list_closed_raw,
+      list_closed
+    ];
+    for (const list of lists) {
+      const found = list.find((issue) => issue.id === issue_id);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Remove an issue from every local board source list.
+   *
+   * @param {string} issue_id
+   */
+  function removeLocalIssue(issue_id) {
+    list_ready_unfiltered = list_ready_unfiltered.filter(
+      (issue) => issue.id !== issue_id
+    );
+    list_blocked_unfiltered = list_blocked_unfiltered.filter(
+      (issue) => issue.id !== issue_id
+    );
+    list_in_progress_unfiltered = list_in_progress_unfiltered.filter(
+      (issue) => issue.id !== issue_id
+    );
+    list_closed_unfiltered = list_closed_unfiltered.filter(
+      (issue) => issue.id !== issue_id
+    );
+  }
+
+  /**
+   * Find an issue in the source list for a target column.
+   *
+   * @param {string} issue_id
+   * @param {string} target_column_id
+   * @returns {IssueLite | null}
+   */
+  function findIssueInTargetSource(issue_id, target_column_id) {
+    const list =
+      target_column_id === 'closed-col'
+        ? list_closed_unfiltered
+        : target_column_id === 'in-progress-col'
+          ? list_in_progress_unfiltered
+          : target_column_id === 'blocked-col'
+            ? list_blocked_unfiltered
+            : list_ready_unfiltered;
+    return list.find((issue) => issue.id === issue_id) || null;
+  }
+
+  /**
+   * Check whether a stale source column still contains an optimistically moved issue.
+   *
+   * @param {string} issue_id
+   * @param {string} target_column_id
+   */
+  function hasIssueOutsideTargetSource(issue_id, target_column_id) {
+    /** @type {IssueLite[][]} */
+    const lists = [];
+    if (target_column_id !== 'ready-col') {
+      lists.push(list_ready_unfiltered);
+    }
+    if (target_column_id !== 'blocked-col') {
+      lists.push(list_blocked_unfiltered);
+    }
+    if (target_column_id !== 'in-progress-col') {
+      lists.push(list_in_progress_unfiltered);
+    }
+    if (target_column_id !== 'closed-col') {
+      lists.push(list_closed_unfiltered);
+    }
+    return lists.some((list) => list.some((issue) => issue.id === issue_id));
+  }
+
+  /**
+   * Add an issue to the source list for a target column.
+   *
+   * @param {IssueLite} issue
+   * @param {string} target_column_id
+   */
+  function addIssueToTargetSource(issue, target_column_id) {
+    if (target_column_id === 'closed-col') {
+      list_closed_unfiltered = [...list_closed_unfiltered, issue];
+    } else if (target_column_id === 'in-progress-col') {
+      list_in_progress_unfiltered = [...list_in_progress_unfiltered, issue];
+    } else if (target_column_id === 'blocked-col') {
+      list_blocked_unfiltered = [...list_blocked_unfiltered, issue];
+    } else {
+      list_ready_unfiltered = [...list_ready_unfiltered, issue];
+    }
+  }
+
+  /**
+   * Preserve accepted local moves while subscription pushes catch up.
+   */
+  function applyOptimisticMovesToSources() {
+    for (const [issue_id, move] of optimistic_status_moves) {
+      const authoritative_issue = findIssueInTargetSource(
+        issue_id,
+        move.target_column_id
+      );
+      const has_stale_source = hasIssueOutsideTargetSource(
+        issue_id,
+        move.target_column_id
+      );
+      removeLocalIssue(issue_id);
+      if (authoritative_issue) {
+        addIssueToTargetSource(authoritative_issue, move.target_column_id);
+        if (!has_stale_source) {
+          optimistic_status_moves.delete(issue_id);
+        }
+      } else {
+        addIssueToTargetSource(move.issue, move.target_column_id);
+      }
+    }
+  }
+
+  /**
+   * Recompute visible board lists from local unfiltered source lists.
+   */
+  function recomputeVisibleLists() {
+    const cmp = SORT_ORDER_COMPARATORS[sort_order] ?? cmpPriorityThenCreated;
+    list_ready_unfiltered = [...list_ready_unfiltered].sort(cmp);
+    list_blocked_unfiltered = [...list_blocked_unfiltered].sort(cmp);
+    list_in_progress_unfiltered = [...list_in_progress_unfiltered].sort(cmp);
+    list_closed_unfiltered = [...list_closed_unfiltered].sort(cmp);
+
+    list_ready = applyLabelFilter(list_ready_unfiltered);
+    list_blocked = applyLabelFilter(list_blocked_unfiltered);
+    list_in_progress = applyLabelFilter(list_in_progress_unfiltered);
+    list_closed_raw = applyLabelFilter(list_closed_unfiltered);
+    applyClosedFilter();
+  }
+
+  /**
+   * Move an issue locally after the server accepts a status update. Push
+   * subscriptions remain authoritative and will reconcile this optimistic view.
+   *
+   * @param {string} issue_id
+   * @param {'open'|'in_progress'|'closed'} new_status
+   * @param {string} target_column_id
+   * @param {unknown} updated_value
+   */
+  function applyLocalStatusUpdate(
+    issue_id,
+    new_status,
+    target_column_id,
+    updated_value
+  ) {
+    const fallback_issue = findLocalIssue(issue_id);
+    const updated_issue = normalizeIssueLite(
+      updated_value,
+      fallback_issue,
+      issue_id,
+      new_status
+    );
+
+    optimistic_status_moves.set(issue_id, {
+      issue: updated_issue,
+      target_column_id
+    });
+    applyOptimisticMovesToSources();
+    recomputeVisibleLists();
+    doRender();
   }
 
   /**
@@ -547,8 +793,9 @@ export function createBoardView(
    *
    * @param {string} issue_id
    * @param {'open'|'in_progress'|'closed'} new_status
+   * @param {string} target_column_id
    */
-  async function updateIssueStatus(issue_id, new_status) {
+  async function updateIssueStatus(issue_id, new_status, target_column_id) {
     if (!transport) {
       log('no transport available, status update skipped');
       showToast('Cannot update status: not connected', 'error');
@@ -556,7 +803,11 @@ export function createBoardView(
     }
     try {
       log('update-status %s → %s', issue_id, new_status);
-      await transport('update-status', { id: issue_id, status: new_status });
+      const updated = await transport('update-status', {
+        id: issue_id,
+        status: new_status
+      });
+      applyLocalStatusUpdate(issue_id, new_status, target_column_id, updated);
       showToast('Status updated', 'success', 1500);
     } catch (err) {
       log('update-status failed: %o', err);
@@ -783,7 +1034,7 @@ export function createBoardView(
     }
 
     log('drop %s on %s → %s', issue_id, col_id, new_status);
-    void updateIssueStatus(issue_id, new_status);
+    void updateIssueStatus(issue_id, new_status, col_id);
   });
 
   /**
@@ -931,13 +1182,12 @@ export function createBoardView(
         list_in_progress_unfiltered = in_progress;
         list_closed_unfiltered = closed;
 
-        // Apply label filter to all columns
-        list_ready = applyLabelFilter(ready);
-        list_blocked = applyLabelFilter(blocked);
-        list_in_progress = applyLabelFilter(in_progress);
-        list_closed_raw = applyLabelFilter(closed);
+        applyOptimisticMovesToSources();
+        recomputeVisibleLists();
       }
-      applyClosedFilter();
+      if (!selectors) {
+        recomputeVisibleLists();
+      }
       doRender();
     } catch {
       list_ready = [];
@@ -1036,11 +1286,12 @@ export function createBoardView(
           ready.sort(cmp);
           blocked.sort(cmp);
           in_prog.sort(cmp);
-          list_ready = ready;
-          list_blocked = blocked;
-          list_in_progress = in_prog;
-          list_closed_raw = closed;
-          applyClosedFilter();
+          list_ready_unfiltered = ready;
+          list_blocked_unfiltered = blocked;
+          list_in_progress_unfiltered = in_prog;
+          list_closed_unfiltered = closed;
+          applyOptimisticMovesToSources();
+          recomputeVisibleLists();
           doRender();
         }
       } catch {
@@ -1053,6 +1304,12 @@ export function createBoardView(
       list_blocked = [];
       list_in_progress = [];
       list_closed = [];
+      list_ready_unfiltered = [];
+      list_blocked_unfiltered = [];
+      list_in_progress_unfiltered = [];
+      list_closed_unfiltered = [];
+      list_closed_raw = [];
+      optimistic_status_moves.clear();
     }
   };
 }
