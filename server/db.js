@@ -6,7 +6,8 @@ import path from 'node:path';
  * Resolve the SQLite DB path used by beads according to precedence:
  * 1) explicit --db flag (provided via options.explicit_db)
  * 2) BEADS_DB environment variable
- * 3) nearest ".beads/*.db" by walking up from cwd
+ * 3) nearest ".beads/*.db" by walking up from cwd (excluding
+ *    "~/.beads/default.db", which is reserved for fallback)
  * 4) "~/.beads/default.db" fallback
  *
  * Returns a normalized absolute path and a `source` indicator. Existence is
@@ -18,6 +19,7 @@ import path from 'node:path';
 export function resolveDbPath(options = {}) {
   const cwd = options.cwd ? path.resolve(options.cwd) : process.cwd();
   const env = options.env || process.env;
+  const home_default = path.join(os.homedir(), '.beads', 'default.db');
 
   // 1) explicit flag
   if (options.explicit_db && options.explicit_db.length > 0) {
@@ -33,17 +35,67 @@ export function resolveDbPath(options = {}) {
 
   // 3) nearest .beads/*.db walking up
   const nearest = findNearestBeadsDb(cwd);
-  if (nearest) {
+  if (nearest && path.normalize(nearest) !== path.normalize(home_default)) {
     return { path: nearest, source: 'nearest', exists: fileExists(nearest) };
   }
 
   // 4) ~/.beads/default.db
-  const home_default = path.join(os.homedir(), '.beads', 'default.db');
   return {
     path: home_default,
     source: 'home-default',
     exists: fileExists(home_default)
   };
+}
+
+/**
+ * Resolve the workspace database location used by the UI/server.
+ *
+ * For non-SQLite backends (for example Dolt), this returns the nearest
+ * workspace `.beads` directory when metadata exists. This avoids collapsing
+ * all such workspaces onto the `~/.beads/default.db` fallback.
+ *
+ * @param {{ cwd?: string, env?: Record<string, string | undefined>, explicit_db?: string }} [options]
+ * @returns {{ path: string, source: 'flag'|'env'|'nearest'|'metadata'|'home-default', exists: boolean }}
+ */
+export function resolveWorkspaceDatabase(options = {}) {
+  const sqlite_db = resolveDbPath(options);
+  if (sqlite_db.source !== 'home-default') {
+    return sqlite_db;
+  }
+
+  const cwd = options.cwd ? path.resolve(options.cwd) : process.cwd();
+  const metadata_path = findNearestBeadsMetadata(cwd);
+  if (metadata_path) {
+    return {
+      path: path.dirname(metadata_path),
+      source: 'metadata',
+      exists: true
+    };
+  }
+
+  return sqlite_db;
+}
+
+/**
+ * Find nearest `.beads/metadata.json` by walking up from start.
+ *
+ * @param {string} start
+ * @returns {string | null}
+ */
+export function findNearestBeadsMetadata(start) {
+  let dir = path.resolve(start);
+  for (let i = 0; i < 100; i++) {
+    const metadata_path = path.join(dir, '.beads', 'metadata.json');
+    if (fileExists(metadata_path)) {
+      return metadata_path;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return null;
 }
 
 /**

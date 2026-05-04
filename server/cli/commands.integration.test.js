@@ -25,7 +25,12 @@ vi.mock('../db.js', () => ({
   resolveDbPath: () => ({
     path: '/mock/test.db',
     source: 'nearest',
-    exists: false
+    exists: true
+  }),
+  resolveWorkspaceDatabase: () => ({
+    path: '/mock/test.db',
+    source: 'nearest',
+    exists: true
   })
 }));
 

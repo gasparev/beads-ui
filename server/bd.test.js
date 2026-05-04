@@ -1,7 +1,10 @@
 import { spawn as spawnMock } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   _resetQueue,
   getBdBin,
@@ -24,10 +27,8 @@ function makeFakeProc(stdoutText, stderrText, code) {
   const err = new PassThrough();
   cp.stdout = out;
   cp.stderr = err;
-  // Emit data/close once a 'close' listener is attached (i.e. after
-  // _spawnBd has set up its event handlers).  This is necessary because
-  // runBd serializes via a promise queue, so spawn is called inside a
-  // microtask — the old queueMicrotask() approach fired before spawn ran.
+  // Emit data/close once a 'close' listener is attached. runBd serializes via
+  // a promise queue, so spawn is called from a microtask after runBd() starts.
   const origOn = cp.on.bind(cp);
   /**
    * @param {string | symbol} event
@@ -54,10 +55,28 @@ function makeFakeProc(stdoutText, stderrText, code) {
 }
 
 const mockedSpawn = /** @type {import('vitest').Mock} */ (spawnMock);
+/** @type {string[]} */
+const temp_dirs = [];
+
+function make_temp_dir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bdui-bd-'));
+  temp_dirs.push(dir);
+  return dir;
+}
 
 beforeEach(() => {
   mockedSpawn.mockReset();
   _resetQueue();
+});
+
+afterEach(() => {
+  for (const dir of temp_dirs.splice(0)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
 });
 
 describe('getBdBin', () => {
@@ -74,6 +93,40 @@ describe('getBdBin', () => {
 });
 
 describe('runBd', () => {
+  test('prepends --sandbox by default', async () => {
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['list', '--json']);
+
+    const args = mockedSpawn.mock.calls[0][1];
+    expect(args[0]).toBe('--sandbox');
+    expect(args.slice(1)).toEqual(['list', '--json']);
+  });
+
+  test('does not duplicate --sandbox when caller already provides it', async () => {
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['--sandbox', 'list', '--json']);
+
+    const args = mockedSpawn.mock.calls[0][1];
+    expect(args).toEqual(['--sandbox', 'list', '--json']);
+  });
+
+  test('allows disabling default sandbox via BDUI_BD_SANDBOX', async () => {
+    const prev = process.env.BDUI_BD_SANDBOX;
+    process.env.BDUI_BD_SANDBOX = '0';
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+
+    await runBd(['list', '--json']);
+
+    const args = mockedSpawn.mock.calls[0][1];
+    expect(args).toEqual(['list', '--json']);
+
+    if (prev === undefined) {
+      delete process.env.BDUI_BD_SANDBOX;
+    } else {
+      process.env.BDUI_BD_SANDBOX = prev;
+    }
+  });
+
   test('returns stdout/stderr and exit code', async () => {
     mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
     const res = await runBd(['--version']);
@@ -86,6 +139,38 @@ describe('runBd', () => {
     const res = await runBd(['list']);
     expect(res.code).toBe(1);
     expect(res.stderr).toContain('boom');
+  });
+
+  test('sets BEADS_DB for workspace-local SQLite db', async () => {
+    const root = make_temp_dir();
+    const beads_dir = path.join(root, '.beads');
+    fs.mkdirSync(beads_dir, { recursive: true });
+    const workspace_db = path.join(beads_dir, 'ui.db');
+    fs.writeFileSync(workspace_db, '');
+
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['list'], { cwd: root, env: {} });
+
+    const options = mockedSpawn.mock.calls[0][2];
+    expect(options.env.BEADS_DB).toBe(workspace_db);
+  });
+
+  test('does not force BEADS_DB when workspace has no local SQLite db', async () => {
+    const root = make_temp_dir();
+
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['list'], { cwd: root, env: {} });
+
+    const options = mockedSpawn.mock.calls[0][2];
+    expect(options.env.BEADS_DB).toBeUndefined();
+  });
+
+  test('preserves explicit BEADS_DB from caller env', async () => {
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['list'], { env: { BEADS_DB: '/custom/workspace.db' } });
+
+    const options = mockedSpawn.mock.calls[0][2];
+    expect(options.env.BEADS_DB).toBe('/custom/workspace.db');
   });
 });
 

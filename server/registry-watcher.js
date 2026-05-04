@@ -183,6 +183,9 @@ export function watchRegistry(onChange, options = {}) {
         }
       }
     );
+    watcher.on?.('error', (err) => {
+      log('registry watcher error: %o', err);
+    });
   } catch (err) {
     log('unable to watch registry directory: %o', err);
     return { close: () => {} };

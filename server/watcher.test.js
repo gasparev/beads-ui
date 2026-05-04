@@ -1,19 +1,35 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { watchDb } from './watcher.js';
 
-/** @type {{ dir: string, cb: (event: string, filename?: string) => void, w: { close: () => void } }[]} */
+/** @type {{ dir: string, cb: (event: string, filename?: string) => void, w: { close: () => void, on: (event: string, fn: (err: Error) => void) => void }, emitError: (err: Error) => void }[]} */
 const watchers = [];
 
 vi.mock('node:fs', () => {
   const watch = vi.fn((dir, _opts, cb) => {
     // Minimal event emitter interface for FSWatcher
-    const handlers = /** @type {{ close: Array<() => void> }} */ ({
-      close: []
-    });
+    const handlers =
+      /** @type {{ close: Array<() => void>, error: Array<(err: Error) => void> }} */ ({
+        close: [],
+        error: []
+      });
     const w = {
-      close: () => handlers.close.forEach((fn) => fn())
+      close: () => handlers.close.forEach((fn) => fn()),
+      /**
+       * @param {string} event
+       * @param {(err: Error) => void} fn
+       */
+      on: (event, fn) => {
+        if (event === 'error') {
+          handlers.error.push(fn);
+        }
+      }
     };
-    watchers.push({ dir, cb, w });
+    watchers.push({
+      dir,
+      cb,
+      w,
+      emitError: (err) => handlers.error.forEach((fn) => fn(err))
+    });
     return /** @type {any} */ (w);
   });
   return { default: { watch }, watch };
@@ -89,6 +105,17 @@ describe('watchDb', () => {
     second.cb('change', 'alt.db');
     vi.advanceTimersByTime(60);
     expect(calls.length).toBe(1);
+
+    handle.close();
+  });
+
+  test('ignores watcher error events', () => {
+    const handle = watchDb('/repo', () => {}, {
+      explicit_db: '/repo/.beads/ui.db'
+    });
+    const watcher = watchers[0];
+
+    expect(() => watcher.emitError(new Error('too many files'))).not.toThrow();
 
     handle.close();
   });

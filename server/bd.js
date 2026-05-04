@@ -1,15 +1,10 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { resolveDbPath } from './db.js';
 import { debug } from './logging.js';
 
 const log = debug('bd');
-
-// Serialize bd commands to prevent concurrent Dolt embedded engine access
-// which causes SIGSEGV panics due to noms lock contention.
-/** @type {Promise<unknown>} */
-let _queue = Promise.resolve();
+/** @type {Promise<void>} */
+let bd_run_queue = Promise.resolve();
 
 /**
  * Get the git user name from git config.
@@ -58,36 +53,39 @@ export function getBdBin() {
 }
 
 /**
- * Spawn a single `bd` process. Not serialized – use `runBd` instead.
+ * Run the `bd` CLI with provided arguments.
+ * Shell is not used to avoid injection; args must be pre-split.
+ * Commands are serialized to prevent concurrent Dolt engine access.
  *
- * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string, string | undefined>, timeout_ms?: number }} options
+ * @param {string[]} args - Arguments to pass (e.g., ["list", "--json"]).
+ * @param {{ cwd?: string, env?: Record<string, string | undefined>, timeout_ms?: number }} [options]
  * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
  */
-function _spawnBd(args, options) {
-  const bin = getBdBin();
+export function runBd(args, options = {}) {
+  return withBdRunQueue(async () => runBdUnlocked(args, options));
+}
 
-  // Ensure a consistent DB by setting BEADS_DB environment variable.
-  // However, if the workspace uses a Dolt backend (indicated by
-  // .beads/metadata.json), skip setting BEADS_DB so `bd` resolves
-  // the Dolt database itself.
+/**
+ * Run the `bd` CLI with provided arguments without queueing.
+ *
+ * @param {string[]} args
+ * @param {{ cwd?: string, env?: Record<string, string | undefined>, timeout_ms?: number }} [options]
+ * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
+ */
+function runBdUnlocked(args, options = {}) {
+  const bin = getBdBin();
   const effective_cwd = options.cwd || process.cwd();
-  const has_dolt_workspace = existsSync(
-    join(effective_cwd, '.beads', 'metadata.json')
-  );
-  const env_with_db = {
-    ...(options.env || process.env)
-  };
-  if (!has_dolt_workspace) {
-    const db_path = resolveDbPath({
-      cwd: effective_cwd,
-      env: options.env || process.env
-    });
-    if (db_path.exists) {
-      env_with_db.BEADS_DB = db_path.path;
-    }
-  } else {
-    delete env_with_db.BEADS_DB;
+
+  // Set BEADS_DB only when the workspace has a local SQLite DB.
+  // Do not force BEADS_DB from global fallback paths; this can override
+  // backend autodetection in non-SQLite workspaces (for example Dolt).
+  const db_path = resolveDbPath({
+    cwd: effective_cwd,
+    env: options.env || process.env
+  });
+  const env_with_db = { ...(options.env || process.env) };
+  if (db_path.source === 'nearest' && db_path.exists) {
+    env_with_db.BEADS_DB = db_path.path;
   }
 
   const spawn_opts = {
@@ -98,7 +96,7 @@ function _spawnBd(args, options) {
   };
 
   /** @type {string[]} */
-  const final_args = args.slice();
+  const final_args = buildBdArgs(args);
 
   return new Promise((resolve) => {
     const child = spawn(bin, final_args, spawn_opts);
@@ -156,20 +154,56 @@ function _spawnBd(args, options) {
 }
 
 /**
- * Run the `bd` CLI with provided arguments.
- * Shell is not used to avoid injection; args must be pre-split.
- * Commands are serialized to prevent concurrent Dolt engine access.
+ * Build final bd CLI arguments.
+ * bdui defaults to sandbox mode to avoid sync/autopush overhead on interactive
+ * UI requests. Set `BDUI_BD_SANDBOX=0` (or "false") to opt out.
  *
- * @param {string[]} args - Arguments to pass (e.g., ["list", "--json"]).
- * @param {{ cwd?: string, env?: Record<string, string | undefined>, timeout_ms?: number }} [options]
- * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
+ * @param {string[]} args
+ * @returns {string[]}
  */
-export function runBd(args, options = {}) {
-  // Chain onto the queue so only one bd process runs at a time.
-  const task = _queue.then(() => _spawnBd(args, options));
-  // Swallow rejections so the queue never gets stuck.
-  _queue = task.catch(() => {});
-  return task;
+function buildBdArgs(args) {
+  const arg_set = new Set(args);
+  const raw_sandbox = String(process.env.BDUI_BD_SANDBOX || '').toLowerCase();
+  const sandbox_disabled = raw_sandbox === '0' || raw_sandbox === 'false';
+  const should_prepend_sandbox = !sandbox_disabled && !arg_set.has('--sandbox');
+
+  if (!should_prepend_sandbox) {
+    return args.slice();
+  }
+
+  return ['--sandbox', ...args];
+}
+
+/**
+ * Serialize `bd` invocations.
+ * Dolt embedded mode can crash when multiple `bd` processes run concurrently
+ * against the same workspace.
+ *
+ * @template T
+ * @param {() => Promise<T>} operation
+ * @returns {Promise<T>}
+ */
+async function withBdRunQueue(operation) {
+  const previous = bd_run_queue;
+  /** @type {() => void} */
+  let release = () => {};
+  bd_run_queue = new Promise((resolve) => {
+    release = resolve;
+  });
+
+  await previous.catch(() => {});
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Reset the command queue. Only for use in tests.
+ */
+export function _resetQueue() {
+  bd_run_queue = Promise.resolve();
 }
 
 /**
@@ -178,17 +212,6 @@ export function runBd(args, options = {}) {
  * @param {string[]} args - Must include flags that cause JSON to be printed (e.g., `--json`).
  * @param {{ cwd?: string, env?: Record<string, string | undefined>, timeout_ms?: number }} [options]
  * @returns {Promise<{ code: number, stdoutJson?: unknown, stderr?: string }>}
- */
-/**
- * Reset the command queue. Only for use in tests.
- */
-export function _resetQueue() {
-  _queue = Promise.resolve();
-}
-
-/**
- * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string, string | undefined>, timeout_ms?: number }} [options]
  */
 export async function runBdJson(args, options = {}) {
   const result = await runBd(args, options);

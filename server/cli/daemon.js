@@ -1,13 +1,14 @@
 /**
  * @import { SpawnOptions } from 'node:child_process'
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig } from '../config.js';
-import { resolveDbPath } from '../db.js';
+import { resolveWorkspaceDatabase } from '../db.js';
 
 /**
  * Resolve the runtime directory used for PID and log files.
@@ -257,11 +258,79 @@ function sleep(ms) {
 }
 
 /**
+ * Detect the TCP port a process is listening on by inspecting OS state.
+ * Returns the first LISTEN port found for the given PID, or null.
+ *
+ * @param {number} pid
+ * @returns {number | null}
+ */
+export function detectListeningPort(pid) {
+  try {
+    const output = execFileSync(
+      'lsof',
+      ['-iTCP', '-sTCP:LISTEN', '-a', '-p', String(pid), '-Fn', '-P'],
+      { encoding: 'utf8', timeout: 3000 }
+    );
+
+    // lsof -Fn outputs lines like "n*:3000" or "n127.0.0.1:4000"
+    for (const line of output.split('\n')) {
+      if (line.startsWith('n')) {
+        const colon_index = line.lastIndexOf(':');
+        if (colon_index >= 0) {
+          const port_value = Number.parseInt(line.slice(colon_index + 1), 10);
+          if (Number.isFinite(port_value) && port_value > 0) {
+            return port_value;
+          }
+        }
+      }
+    }
+  } catch {
+    // lsof not available or process gone — fall through
+  }
+  return null;
+}
+
+/**
+ * Check whether a TCP port is available on the given host.
+ *
+ * @param {number} port
+ * @param {string} host
+ * @returns {Promise<boolean>}
+ */
+export function isPortAvailable(port, host) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.listen(port, host, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+/**
+ * Starting from `port`, find the first available port on `host`.
+ * Tries up to `max_attempts` consecutive ports.
+ *
+ * @param {number} port
+ * @param {string} host
+ * @param {number} [max_attempts]
+ * @returns {Promise<number | null>}
+ */
+export async function findAvailablePort(port, host, max_attempts = 10) {
+  for (let i = 0; i < max_attempts; i++) {
+    if (await isPortAvailable(port + i, host)) {
+      return port + i;
+    }
+  }
+  return null;
+}
+
+/**
  * Print the server URL derived from current config.
  */
 export function printServerUrl() {
   // Resolve from the caller's working directory by default
-  const resolved_db = resolveDbPath();
+  const resolved_db = resolveWorkspaceDatabase();
   console.log(
     `beads db   ${resolved_db.path} (${resolved_db.source}${resolved_db.exists ? '' : ', missing'})`
   );
