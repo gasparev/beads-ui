@@ -1,5 +1,122 @@
 # Changes
 
+## 0.12.3
+
+- [`cee1d6d`](https://github.com/mantoni/beads-ui/commit/cee1d6d945828e33eebaf7ca76604fe8a457a772)
+  fix(list): remove the silent 50-issue list limit (#99) (Inconceivable Labs)
+    >
+    > Pass --limit 0 for all-issues and in-progress subscriptions so the UI does not silently truncate bd results.
+- [`04c78e3`](https://github.com/mantoni/beads-ui/commit/04c78e352fb6c0af0616962701a39e42bc938cb3)
+  fix(ws): pin bd invocations to the active workspace cwd (#88) (Inconceivable Labs)
+    >
+    > Ensure every bd mutation and follow-up read runs in the active workspace, and centralize non-zero bd exit logging.
+
+_Released by gprocunier on 2026-07-17._
+
+## 0.12.2
+
+- [`92b80f9`](https://github.com/mantoni/beads-ui/commit/92b80f90339a7619dc0d8f7a10046b023658004d)
+  fix: use 'bd comments add' so --author is accepted (#97) (Jim C)
+    >
+    > Fixes #67 and #74.
+- [`bc972a2`](https://github.com/mantoni/beads-ui/commit/bc972a2af68c0ae6fcab9b6c0613a28543fea5ec)
+  fix(detail): request --include-dependents so children render (#94) (Nick Veenhof)
+    >
+    > Fixes #93.
+
+_Released by gprocunier on 2026-07-10._
+
+## 0.12.1
+
+- [`dee0ffa`](https://github.com/mantoni/beads-ui/commit/dee0ffac6a5635c6761a4c97e3878157f2131f6b)
+  Fix detail comments after live updates (#92) (Greg Procunier)
+    >
+    > Co-authored-by: gprocunier <gprocunier@users.noreply.github.com>
+- [`41135d1`](https://github.com/mantoni/beads-ui/commit/41135d185936c73b719a8cd27519b0918108de00)
+  feat(cli): print server URL on start/restart when reusing existing server (#79) (Leon Letto)
+    >
+    > Previously `bdui restart` (and `start` when the default port was already
+    > in use by another bdui) only reported that the workspace was registered
+    > with an existing server, with no clickable URL in the terminal output.
+    > This adds a `beads ui   listening on <url>` line to those paths so users
+    > can click straight through to the UI.
+
+_Released by gprocunier on 2026-07-03._
+
+## 0.12.0
+
+- [`8559d4a`](https://github.com/mantoni/beads-ui/commit/8559d4af699555b9943914a2e790965c9e4d8da7)
+  feat(cli): auto-increment port when default is in use (#73) (Leon Letto)
+- [`527e9a5`](https://github.com/mantoni/beads-ui/commit/527e9a59a01e1b93c1488cb1e2ed26ae346b358c)
+  feat(cli): preserve workspaces across bdui restart (#72) (Leon Letto)
+- [`5996b39`](https://github.com/mantoni/beads-ui/commit/5996b39499bcf0e460133c27a7ee20b30c677ab5)
+  chore: add dev-docs to .prettierignore (Leon Letto)
+- [`08f1439`](https://github.com/mantoni/beads-ui/commit/08f1439d13fc5b534de13e1ea94af4407174d76f)
+  style: fix prettier formatting in daemon and test files (Leon Letto)
+- [`4a0c791`](https://github.com/mantoni/beads-ui/commit/4a0c791300f12e47faae74e8237f823857be7dd9)
+  fix: resolve TS18048 type error in restart test (Leon Letto)
+- [`c973d86`](https://github.com/mantoni/beads-ui/commit/c973d8693c6cfa3a5f8ad0905134465903e527a2)
+  feat(cli): preserve listening port across bdui restart (Leon Letto)
+
+_Released by [Maximilian Antoni](https://github.com/mantoni) on 2026-04-02._
+
+## 0.11.3
+
+- [`47261a7`](https://github.com/mantoni/beads-ui/commit/47261a7a95d5a17b480ae56c4a10b5eeb49d1007)
+  feat: show close reason in issue detail view (#63) (Tom Preece)
+
+_Released by [Maximilian Antoni](https://github.com/mantoni) on 2026-03-18._
+
+## 0.11.2
+
+- [`929a15d`](https://github.com/mantoni/beads-ui/commit/929a15da79ead6819044e50580093e3cbe87758b)
+  Fix beads setup
+- [`b354aa6`](https://github.com/mantoni/beads-ui/commit/b354aa63a7d04abe50b0da74c5c0e62077f44b69)
+  fix: apply --port/--host overrides before workspace registration (Ryan Peterson)
+
+_Released by [Maximilian Antoni](https://github.com/mantoni) on 2026-03-11._
+
+## 0.11.1
+
+- [`0fc2df7`](https://github.com/mantoni/beads-ui/commit/0fc2df7cbaeb6f0500900ce2bf87e6b3fa8e8ac0)
+  style: fix prettier formatting in list-adapters test (Leon Letto)
+- [`e00ddfc`](https://github.com/mantoni/beads-ui/commit/e00ddfc9b9d421dc31b7d7703f4bfbc9790546f8)
+  fix: add --tree=false to bd list calls for bd 0.59.0 compat (Leon Letto)
+
+_Released by [Maximilian Antoni](https://github.com/mantoni) on 2026-03-07._
+
+## 0.11.0
+
+- [`fc00b87`](https://github.com/mantoni/beads-ui/commit/fc00b87cfd1b6600a9b9088a9f62c2f6e8fc919e)
+  fix(ui): harden daemon restart workspace registration (Leon Letto)
+- [`2ea0dd0`](https://github.com/mantoni/beads-ui/commit/2ea0dd08eb71625fa3ae51e64ea6501b4d058154)
+  perf(ui): reduce list latency by default sandbox bd calls (Leon Letto)
+
+_Released by [Maximilian Antoni](https://github.com/mantoni) on 2026-03-05._
+
+## 0.10.1
+
+- [`62017f7`](https://github.com/mantoni/beads-ui/commit/62017f74fadb439c7270160ac03866d3554f36a3)
+  fix: clipboard copy fallback for non-secure contexts (Rodrigo Blasi)
+
+_Released by [Maximilian Antoni](https://github.com/mantoni) on 2026-03-02._
+
+## 0.10.0
+
+- [`998f256`](https://github.com/mantoni/beads-ui/commit/998f2562b3ad3203c9dd1f627d44b1c2d5ef03a4)
+  Do not wrap issue IDs
+- [`e3c3345`](https://github.com/mantoni/beads-ui/commit/e3c3345db41cd874db8e33ec79c904cc314e6bf8)
+  Improve workspace resolution and fallback db
+- [`6de4652`](https://github.com/mantoni/beads-ui/commit/6de4652c336f77c8d8ec9cc13f5a47e9ba1b3857)
+  Avoid concurrent DB access to work around dolt panic
+- [`011fe9e`](https://github.com/mantoni/beads-ui/commit/011fe9e3dfaa475f744b69ff6b44c3cc23283ad1)
+  Support dolt backend
+- [`63ed3c3`](https://github.com/mantoni/beads-ui/commit/63ed3c3f3f98aa2c6d621537887d98701289dac6)
+  Update beads
+- [`cd0a4c5`](https://github.com/mantoni/beads-ui/commit/cd0a4c59fcfe2c9a655ed2079a2a059a242906c5)
+  docs: highlight multi-workspace feature in README (#47) (Pablo LION)
+
+_Released by [Maximilian Antoni](https://github.com/mantoni) on 2026-02-25._
 ## 0.9.3
 
 - [`2e04bc1`](https://github.com/mantoni/beads-ui/commit/2e04bc1eeb5c43e6934d858cd017d80f745a38bb)

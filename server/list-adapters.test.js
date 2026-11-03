@@ -14,7 +14,8 @@ describe('list adapters for subscription types', () => {
 
   test('mapSubscriptionToBdArgs returns args for all-issues', () => {
     const args = mapSubscriptionToBdArgs({ type: 'all-issues' });
-    expect(args).toEqual(['list', '--json', '--tree=false']);
+    // `--limit 0` = unlimited; without it bd list truncates at its default 50
+    expect(args).toEqual(['list', '--json', '--tree=false', '--limit', '0']);
   });
 
   test('mapSubscriptionToBdArgs returns args for epics', () => {
@@ -35,12 +36,15 @@ describe('list adapters for subscription types', () => {
 
   test('mapSubscriptionToBdArgs returns args for in-progress-issues', () => {
     const args = mapSubscriptionToBdArgs({ type: 'in-progress-issues' });
+    // `--limit 0` = unlimited; without it bd list truncates at its default 50
     expect(args).toEqual([
       'list',
       '--json',
       '--tree=false',
       '--status',
-      'in_progress'
+      'in_progress',
+      '--limit',
+      '0'
     ]);
   });
 
@@ -62,7 +66,7 @@ describe('list adapters for subscription types', () => {
       type: 'issue-detail',
       params: { id: 'UI-123' }
     });
-    expect(args).toEqual(['show', 'UI-123', '--json']);
+    expect(args).toEqual(['show', 'UI-123', '--json', '--include-dependents']);
   });
 
   test('fetchListForSubscription returns normalized items (Date.parse)', async () => {
@@ -182,6 +186,35 @@ describe('list adapters for subscription types', () => {
         id: 'E-1',
         status: 'open'
       });
+    }
+  });
+
+  test('keeps epic entity in issue-detail snapshots', async () => {
+    /** @type {import('vitest').Mock} */ (runBdJson).mockResolvedValue({
+      code: 0,
+      stdoutJson: [
+        {
+          id: 'E-1',
+          title: 'Epic',
+          issue_type: 'epic',
+          status: 'open',
+          updated_at: '2024-01-01T00:00:00.000Z',
+          closed_at: null,
+          dependents: [{ id: 'E-1.1', issue_type: 'task' }]
+        }
+      ]
+    });
+
+    const res = await fetchListForSubscription({
+      type: 'issue-detail',
+      params: { id: 'E-1' }
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.items).toHaveLength(1);
+      expect(res.items[0]).toMatchObject({ id: 'E-1', issue_type: 'epic' });
+      expect(/** @type {any} */ (res.items[0]).dependents).toHaveLength(1);
     }
   });
 

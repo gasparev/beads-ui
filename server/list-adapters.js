@@ -14,7 +14,8 @@ export function mapSubscriptionToBdArgs(spec) {
   const t = String(spec.type);
   switch (t) {
     case 'all-issues': {
-      return ['list', '--json', '--tree=false'];
+      // `--limit 0` = unlimited. Without it, `bd list` caps at its default 50.
+      return ['list', '--json', '--tree=false', '--limit', '0'];
     }
     case 'epics': {
       return ['list', '--json', '--type', 'epic'];
@@ -26,7 +27,16 @@ export function mapSubscriptionToBdArgs(spec) {
       return ['list', '--json', '--ready', '--limit', '1000'];
     }
     case 'in-progress-issues': {
-      return ['list', '--json', '--tree=false', '--status', 'in_progress'];
+      // `--limit 0` = unlimited. Without it, `bd list` caps at its default 50.
+      return [
+        'list',
+        '--json',
+        '--tree=false',
+        '--status',
+        'in_progress',
+        '--limit',
+        '0'
+      ];
     }
     case 'closed-issues': {
       return [
@@ -45,7 +55,7 @@ export function mapSubscriptionToBdArgs(spec) {
       if (id.length === 0) {
         throw badRequest('Missing param: params.id');
       }
-      return ['show', id, '--json'];
+      return ['show', id, '--json', '--include-dependents'];
     }
     default: {
       throw badRequest(`Unknown subscription type: ${t}`);
@@ -197,9 +207,10 @@ export async function fetchListForSubscription(spec, options = {}) {
       });
     }
 
-    // For non-epic subscriptions, filter out epics so they only appear
-    // in the dedicated Epics view.
-    if (String(spec.type) !== 'epics') {
+    // For non-epic list subscriptions, filter out epics so they only appear
+    // in the dedicated Epics view. Exempt `issue-detail`: expanding an epic
+    // subscribes to the epic entity itself, which must not be filtered out.
+    if (String(spec.type) !== 'epics' && String(spec.type) !== 'issue-detail') {
       raw = raw.filter((it) => {
         const type = /** @type {any} */ (it)?.issue_type;
         return type !== 'epic';
