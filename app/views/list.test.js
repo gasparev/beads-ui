@@ -28,6 +28,27 @@ function toggleFilter(mount, dropdownIndex, optionText) {
 }
 
 /**
+ * Pick a scope radio in the status dropdown.
+ *
+ * @param {HTMLElement} mount - The container element
+ * @param {string} label - Visible label of the radio
+ */
+function selectScope(mount, label) {
+  const dropdown = mount.querySelectorAll('.filter-dropdown')[0];
+  const trigger = /** @type {HTMLButtonElement} */ (
+    dropdown.querySelector('.filter-dropdown__trigger')
+  );
+  trigger.click();
+  const option = Array.from(
+    dropdown.querySelectorAll('.filter-dropdown__option--scope')
+  ).find((opt) => (opt.textContent || '').trim() === label);
+  const radio = /** @type {HTMLInputElement} */ (
+    option?.querySelector('input[type="radio"]')
+  );
+  radio.click();
+}
+
+/**
  * Check if a filter option is checked in a dropdown.
  *
  * @param {HTMLElement} mount - The container element
@@ -131,9 +152,9 @@ describe('views/list', () => {
     const rows = mount.querySelectorAll('tr.issue-row');
     expect(rows.length).toBe(2);
 
-    // badge present
-    const badges = mount.querySelectorAll('.type-badge');
-    expect(badges.length).toBeGreaterThanOrEqual(2);
+    // type cell renders an editable type select
+    const typeSelects = mount.querySelectorAll('select.badge--type');
+    expect(typeSelects.length).toBeGreaterThanOrEqual(2);
 
     const first = /** @type {HTMLElement} */ (rows[0]);
     first.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -334,11 +355,7 @@ describe('views/list', () => {
       issueStores
     );
     await view.load();
-    const statusSelect = /** @type {HTMLSelectElement} */ (
-      mount.querySelector('select')
-    );
-    statusSelect.value = 'ready';
-    statusSelect.dispatchEvent(new Event('change'));
+    selectScope(mount, 'Ready only');
     // switch subscription key and apply ready membership
     issueStores.getStore('tab:issues').applyPush({
       type: 'snapshot',
@@ -443,7 +460,7 @@ describe('views/list', () => {
     expect(isFilterChecked(mount, 1, 'Bug')).toBe(true);
   });
 
-  test('ready filter via select composes from push membership', async () => {
+  test('ready scope composes from push membership', async () => {
     document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
 
@@ -473,11 +490,7 @@ describe('views/list', () => {
     await view.load();
     expect(mount.querySelectorAll('tr.issue-row').length).toBe(2);
 
-    const select = /** @type {HTMLSelectElement} */ (
-      mount.querySelector('select')
-    );
-    select.value = 'ready';
-    select.dispatchEvent(new Event('change'));
+    selectScope(mount, 'Ready only');
     issueStores.getStore('tab:issues').applyPush({
       type: 'snapshot',
       id: 'tab:issues',
@@ -520,13 +533,8 @@ describe('views/list', () => {
     await view.load();
     expect(mount.querySelectorAll('tr.issue-row').length).toBe(2);
 
-    const select = /** @type {HTMLSelectElement} */ (
-      mount.querySelector('select')
-    );
-
     // Switch to ready (subscription now maps to ready-issues)
-    select.value = 'ready';
-    select.dispatchEvent(new Event('change'));
+    selectScope(mount, 'Ready only');
     issueStores.getStore('tab:issues').applyPush({
       type: 'snapshot',
       id: 'tab:issues',
@@ -537,8 +545,7 @@ describe('views/list', () => {
     expect(mount.querySelectorAll('tr.issue-row').length).toBe(1);
 
     // Switch back to all; view should compose from all-issues membership
-    select.value = 'all';
-    select.dispatchEvent(new Event('change'));
+    selectScope(mount, 'By status');
     issueStores.getStore('tab:issues').applyPush({
       type: 'snapshot',
       id: 'tab:issues',
@@ -748,5 +755,122 @@ describe('views/list', () => {
     toggleFilter(mount, 0, 'Open');
     await Promise.resolve();
     expect(mount.querySelectorAll('tr.issue-row').length).toBe(2);
+  });
+
+  test('status filter dropdown offers every status but Hooked, with Ready as a scope', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: []
+    });
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      undefined,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    const dropdown = mount.querySelectorAll('.filter-dropdown')[0];
+    /**
+     * @param {string} group
+     * @returns {string[]}
+     */
+    const labelsOf = (group) =>
+      Array.from(
+        dropdown.querySelectorAll(`.filter-dropdown__option--${group}`)
+      ).map((el) => (el.textContent || '').trim());
+
+    // Ready is a scope, not a status: it is a server-side membership and
+    // cannot be unioned with the client-side status filter.
+    expect(labelsOf('scope')).toEqual(['By status', 'Ready only']);
+    expect(labelsOf('status')).toEqual([
+      'Open',
+      'In progress',
+      'Blocked',
+      'Deferred',
+      'Closed',
+      'Pinned'
+    ]);
+    // Hooked is gate-managed (all-issues query lacks --include-gates), so it
+    // must not be an offered filter option even though it still renders a badge.
+    expect(labelsOf('status')).not.toContain('Hooked');
+  });
+
+  test('filters by a status that is not human-settable', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issues = [
+      { id: 'UI-1', title: 'Alpha', status: 'open', priority: 1 },
+      { id: 'UI-2', title: 'Beta', status: 'pinned', priority: 2 },
+      { id: 'UI-3', title: 'Gamma', status: 'deferred', priority: 3 }
+    ];
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues
+    });
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      undefined,
+      undefined,
+      issueStores
+    );
+    await view.load();
+    expect(mount.querySelectorAll('tr.issue-row').length).toBe(3);
+
+    toggleFilter(mount, 0, 'Pinned');
+    await Promise.resolve();
+    const rows = mount.querySelectorAll('tr.issue-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].getAttribute('data-issue-id')).toBe('UI-2');
+  });
+
+  test('preserves row identity when an earlier issue is inserted', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issueStores = createTestIssueStores();
+    const issue_store = issueStores.getStore('tab:issues');
+    issue_store.applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        { id: 'UI-2', title: 'Two', priority: 1, updated_at: 1 },
+        { id: 'UI-3', title: 'Three', priority: 2, updated_at: 1 }
+      ]
+    });
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      undefined,
+      undefined,
+      issueStores
+    );
+    await view.load();
+    const existing_row = mount.querySelector('[data-issue-id="UI-2"]');
+
+    issue_store.applyPush({
+      type: 'upsert',
+      id: 'tab:issues',
+      revision: 2,
+      issue: { id: 'UI-1', title: 'One', priority: 0, updated_at: 2 }
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mount.querySelector('[data-issue-id="UI-2"]')).toBe(existing_row);
+    view.destroy();
   });
 });

@@ -23,6 +23,21 @@ export function mapSubscriptionToBdArgs(spec) {
     case 'blocked-issues': {
       return ['blocked', '--json'];
     }
+    case 'status-blocked-issues': {
+      // `bd blocked` reports only dependency-blocked issues (whose own status
+      // is `open`), so issues whose stored status is `blocked` need their own
+      // query. The Board's Blocked lane is the union of both.
+      // `--limit 0` = unlimited. Without it, `bd list` caps at its default 50.
+      return [
+        'list',
+        '--json',
+        '--tree=false',
+        '--status',
+        'blocked',
+        '--limit',
+        '0'
+      ];
+    }
     case 'ready-issues': {
       return ['list', '--json', '--ready', '--limit', '1000'];
     }
@@ -120,7 +135,7 @@ export function normalizeIssueList(value) {
  * Errors do not throw; they are surfaced as a structured object.
  *
  * @param {{ type: string, params?: Record<string, string | number | boolean> }} spec
- * @param {{ cwd?: string }} [options] - Optional working directory for bd command
+ * @param {{ cwd?: string, priority?: 'interactive' | 'background' }} [options] - Optional bd command settings
  * @returns {Promise<FetchListResultSuccess | FetchListResultFailure>}
  */
 export async function fetchListForSubscription(spec, options = {}) {
@@ -136,7 +151,10 @@ export async function fetchListForSubscription(spec, options = {}) {
   }
 
   try {
-    const res = await runBdJson(args, { cwd: options.cwd });
+    const res = await runBdJson(args, {
+      cwd: options.cwd,
+      priority: options.priority
+    });
     if (!res || res.code !== 0 || !('stdoutJson' in res)) {
       log(
         'bd failed for %o (args=%o) code=%s stderr=%s',

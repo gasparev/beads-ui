@@ -133,4 +133,195 @@ describe('views/list inline edits', () => {
     );
     expect(prio2.value).toBe('4');
   });
+
+  test('type select dispatches update-type and offers decision option', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+
+    const initial = [
+      {
+        id: 'UI-1',
+        title: 'One',
+        status: 'open',
+        priority: 1,
+        issue_type: 'task'
+      }
+    ];
+
+    /** @type {{ calls: Array<{ type: string, payload: any }> }} */
+    const spy = { calls: [] };
+    let current = [...initial];
+
+    /** @type {(type: string, payload?: any) => Promise<any>} */
+    const send = vi.fn(async (type, payload) => {
+      spy.calls.push({ type, payload });
+      if (type === 'update-type') {
+        const id = payload.id;
+        const idx = current.findIndex((x) => x.id === id);
+        if (idx >= 0) {
+          const updated = { ...current[idx], issue_type: payload.type };
+          current[idx] = updated;
+          issueStores.getStore('tab:issues').applyPush({
+            type: 'upsert',
+            id: 'tab:issues',
+            revision: 2,
+            issues: [updated]
+          });
+        }
+        return {};
+      }
+      throw new Error('Unexpected');
+    });
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: current
+    });
+
+    const view = createListView(
+      mount,
+      send,
+      undefined,
+      undefined,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    const row = /** @type {HTMLElement} */ (
+      mount.querySelector('tr.issue-row[data-issue-id="UI-1"]')
+    );
+    expect(row).toBeTruthy();
+    const typeSel = /** @type {HTMLSelectElement} */ (
+      row.querySelector('select.badge--type')
+    );
+    expect(typeSel).toBeTruthy();
+    expect(typeSel.value).toBe('task');
+
+    // 'decision' must be present as an option
+    const optionValues = Array.from(typeSel.options).map((o) => o.value);
+    expect(optionValues).toContain('decision');
+
+    typeSel.value = 'feature';
+    typeSel.dispatchEvent(new Event('change'));
+
+    await Promise.resolve();
+
+    const typeCall = spy.calls.find((c) => c.type === 'update-type');
+    expect(typeCall).toBeTruthy();
+    expect(typeCall && typeCall.payload).toEqual({
+      id: 'UI-1',
+      type: 'feature'
+    });
+
+    const typeSel2 = /** @type {HTMLSelectElement} */ (
+      mount.querySelector(
+        'tr.issue-row[data-issue-id="UI-1"] select.badge--type'
+      )
+    );
+    expect(typeSel2.value).toBe('feature');
+  });
+
+  test('status select offers only the human-settable statuses', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        {
+          id: 'UI-1',
+          title: 'One',
+          status: 'open',
+          priority: 1,
+          issue_type: 'task'
+        }
+      ]
+    });
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      undefined,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    const select = /** @type {HTMLSelectElement} */ (
+      mount.querySelector(
+        'tr.issue-row[data-issue-id="UI-1"] select.badge--status'
+      )
+    );
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      'open',
+      'in_progress',
+      'blocked',
+      'deferred',
+      'closed'
+    ]);
+  });
+
+  test('status select shows a machine-managed current status but disables it', async () => {
+    document.body.innerHTML = '<aside id="mount" class="panel"></aside>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:issues').applyPush({
+      type: 'snapshot',
+      id: 'tab:issues',
+      revision: 1,
+      issues: [
+        {
+          id: 'UI-9',
+          title: 'Pinned one',
+          status: 'pinned',
+          priority: 1,
+          issue_type: 'task'
+        }
+      ]
+    });
+    const view = createListView(
+      mount,
+      async () => [],
+      undefined,
+      undefined,
+      undefined,
+      issueStores
+    );
+    await view.load();
+
+    const select = /** @type {HTMLSelectElement} */ (
+      mount.querySelector(
+        'tr.issue-row[data-issue-id="UI-9"] select.badge--status'
+      )
+    );
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      'open',
+      'in_progress',
+      'blocked',
+      'deferred',
+      'closed',
+      'pinned'
+    ]);
+    expect(select.value).toBe('pinned');
+    expect(select.classList.contains('is-pinned')).toBe(true);
+
+    // The out-of-set option must display (so the select tells the truth) but
+    // never be choosable: `update-status pinned` is rejected by the server.
+    const disabled_by_value = Object.fromEntries(
+      Array.from(select.options).map((o) => [o.value, o.disabled])
+    );
+    expect(disabled_by_value).toEqual({
+      open: false,
+      in_progress: false,
+      blocked: false,
+      deferred: false,
+      closed: false,
+      pinned: true
+    });
+  });
 });

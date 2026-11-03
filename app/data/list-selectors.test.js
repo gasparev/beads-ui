@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { createListSelectors } from './list-selectors.js';
 import { createSubscriptionIssueStore } from './subscription-issue-store.js';
 
@@ -60,7 +60,36 @@ function setup() {
   return { issueStores, selectors };
 }
 
+/** Wait for the store's configured notification boundary. */
+async function flushStoreNotifications() {
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    await new Promise((resolve) =>
+      globalThis.requestAnimationFrame(() => resolve(undefined))
+    );
+    return;
+  }
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe('list-selectors', () => {
+  test('returns preordered store snapshots without another copy or sort', () => {
+    const issues = [
+      { id: 'A', priority: 1, created_at: 1 },
+      { id: 'B', priority: 2, created_at: 2 }
+    ];
+    const selectors = createListSelectors({
+      snapshotFor() {
+        return issues;
+      }
+    });
+
+    expect(selectors.selectIssuesFor('tab:issues')).toBe(issues);
+    expect(selectors.selectBoardColumn('tab:board:ready', 'ready')).toBe(
+      issues
+    );
+  });
+
   test('returns empty arrays for empty stores', async () => {
     const { selectors } = setup();
     expect(selectors.selectIssuesFor('tab:issues')).toEqual([]);
@@ -209,7 +238,72 @@ describe('list-selectors', () => {
     expect(out).toEqual(['E2', 'E1']);
   });
 
-  test('subscribe triggers once per issues envelope', async () => {
+  test('selectBoardColumnUnion merges sources, dedupes by id and sorts', async () => {
+    const { issueStores, selectors } = setup();
+    issueStores.getStore('tab:board:blocked').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:blocked',
+      revision: 1,
+      issues: [
+        {
+          id: 'D1',
+          priority: 2,
+          created_at: 10_000,
+          updated_at: 10_000,
+          closed_at: null
+        },
+        {
+          id: 'BOTH',
+          priority: 0,
+          created_at: 12_000,
+          updated_at: 12_000,
+          closed_at: null
+        }
+      ]
+    });
+    issueStores.getStore('tab:board:status-blocked').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:status-blocked',
+      revision: 1,
+      issues: [
+        {
+          id: 'BOTH',
+          priority: 0,
+          created_at: 12_000,
+          updated_at: 12_000,
+          closed_at: null
+        },
+        {
+          id: 'S1',
+          priority: 1,
+          created_at: 9_000,
+          updated_at: 9_000,
+          closed_at: null
+        }
+      ]
+    });
+
+    const ids = selectors
+      .selectBoardColumnUnion(
+        ['tab:board:blocked', 'tab:board:status-blocked'],
+        'blocked'
+      )
+      .map((x) => x.id);
+    // Deduped (BOTH appears once) and sorted priority asc → created asc
+    expect(ids).toEqual(['BOTH', 'S1', 'D1']);
+  });
+
+  test('selectBoardColumnUnion returns empty for unknown client ids', async () => {
+    const { selectors } = setup();
+    expect(
+      selectors.selectBoardColumnUnion(
+        ['tab:board:blocked', 'tab:board:status-blocked'],
+        'blocked'
+      )
+    ).toEqual([]);
+  });
+
+  test('subscribe triggers once per synchronous issues burst', async () => {
     const { issueStores, selectors } = setup();
     let calls = 0;
     const off = selectors.subscribe(() => {
@@ -222,7 +316,23 @@ describe('list-selectors', () => {
       revision: 1,
       issues: []
     });
+    expect(calls).toBe(0);
+
+    await flushStoreNotifications();
+
     expect(calls).toBe(1);
     off();
+  });
+
+  test('scopes subscriptions when the registry supports it', () => {
+    const unsubscribe = vi.fn();
+    const subscribeFor = vi.fn(() => unsubscribe);
+    const selectors = createListSelectors({ subscribeFor });
+    const listener = vi.fn();
+
+    const result = selectors.subscribe(listener, ['list:a', 'list:b']);
+
+    expect(subscribeFor).toHaveBeenCalledWith(['list:a', 'list:b'], listener);
+    expect(result).toBe(unsubscribe);
   });
 });

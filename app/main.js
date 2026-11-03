@@ -1,5 +1,6 @@
 /**
  * @import { MessageType } from './protocol.js'
+ * @import { StatusFilter } from './utils/status.js'
  */
 import { html, render } from 'lit-html';
 import { createListSelectors } from './data/list-selectors.js';
@@ -10,6 +11,7 @@ import { createHashRouter, parseHash, parseView } from './router.js';
 import { createStore } from './state.js';
 import { createActivityIndicator } from './utils/activity-indicator.js';
 import { debug } from './utils/logging.js';
+import { normalizeStatusFilters } from './utils/status.js';
 import { showToast } from './utils/toast.js';
 import { createBoardView } from './views/board.js';
 import { createDetailView } from './views/detail.js';
@@ -181,6 +183,10 @@ export function bootstrap(root_element) {
         void unsub_board_blocked().catch(() => {});
         unsub_board_blocked = null;
       }
+      if (unsub_board_status_blocked) {
+        void unsub_board_status_blocked().catch(() => {});
+        unsub_board_status_blocked = null;
+      }
       // Clear all subscription stores
       const storeIds = [
         'tab:issues',
@@ -188,7 +194,8 @@ export function bootstrap(root_element) {
         'tab:board:ready',
         'tab:board:in-progress',
         'tab:board:closed',
-        'tab:board:blocked'
+        'tab:board:blocked',
+        'tab:board:status-blocked'
       ];
       for (const id of storeIds) {
         try {
@@ -345,8 +352,8 @@ export function bootstrap(root_element) {
       client.onConnection(onConn);
     }
     // Load persisted filters (status/search/type) from localStorage
-    /** @type {{ status: 'all'|'open'|'in_progress'|'closed'|'ready', search: string, type: string }} */
-    let persisted_filters = { status: 'all', search: '', type: '' };
+    /** @type {{ status: StatusFilter[], search: string, type: string }} */
+    let persisted_filters = { status: [], search: '', type: '' };
     try {
       const raw = window.localStorage.getItem('beads-ui.filters');
       if (raw) {
@@ -368,11 +375,9 @@ export function bootstrap(root_element) {
             parsed_type = first_valid;
           }
           persisted_filters = {
-            status: ['all', 'open', 'in_progress', 'closed', 'ready'].includes(
-              obj.status
-            )
-              ? obj.status
-              : 'all',
+            // Tolerates the legacy scalar form and drops unknown members; an
+            // entirely invalid value degrades to "all issues".
+            status: normalizeStatusFilters(obj.status),
             search: typeof obj.search === 'string' ? obj.search : '',
             type: parsed_type
           };
@@ -419,6 +424,15 @@ export function bootstrap(root_element) {
       view: last_view,
       board: persistedBoard
     });
+    let persisted_filters_json = JSON.stringify({
+      status: persisted_filters.status,
+      search: persisted_filters.search,
+      type: persisted_filters.type
+    });
+    let persisted_board_json = JSON.stringify({
+      closed_filter: persistedBoard.closed_filter
+    });
+    let persisted_view_value = last_view;
     const router = createHashRouter(store);
     router.start();
     /**
@@ -498,18 +512,25 @@ export function bootstrap(root_element) {
     // Persist filter changes to localStorage
     store.subscribe((s) => {
       const data = {
-        status: s.filters.status,
+        status: normalizeStatusFilters(s.filters.status),
         search: s.filters.search,
         type: typeof s.filters.type === 'string' ? s.filters.type : ''
       };
-      window.localStorage.setItem('beads-ui.filters', JSON.stringify(data));
+      const next_json = JSON.stringify(data);
+      if (next_json !== persisted_filters_json) {
+        window.localStorage.setItem('beads-ui.filters', next_json);
+        persisted_filters_json = next_json;
+      }
     });
     // Persist board preferences
     store.subscribe((s) => {
-      window.localStorage.setItem(
-        'beads-ui.board',
-        JSON.stringify({ closed_filter: s.board.closed_filter })
-      );
+      const next_json = JSON.stringify({
+        closed_filter: s.board.closed_filter
+      });
+      if (next_json !== persisted_board_json) {
+        window.localStorage.setItem('beads-ui.board', next_json);
+        persisted_board_json = next_json;
+      }
     });
     void issues_view.load();
 
@@ -527,12 +548,26 @@ export function bootstrap(root_element) {
       }
     });
 
+    /**
+     * Load comments outside the global activity indicator so a slow comments
+     * request does not keep the entire application in a loading state.
+     *
+     * @param {string} type
+     * @param {unknown} payload
+     */
+    const detail_transport = async (type, payload) => {
+      if (type === 'get-comments') {
+        return client.send(/** @type {MessageType} */ (type), payload);
+      }
+      return transport(type, payload);
+    };
+
     /** @type {ReturnType<typeof createDetailView> | null} */
     let detail = null;
     // Mount details into the dialog body only
     detail = createDetailView(
       dialog.getMount(),
-      transport,
+      detail_transport,
       (hash) => {
         const id = parseHash(hash);
         if (id) {
@@ -658,6 +693,8 @@ export function bootstrap(root_element) {
     let unsub_board_closed = null;
     /** @type {null | (() => Promise<void>)} */
     let unsub_board_blocked = null;
+    /** @type {null | (() => Promise<void>)} */
+    let unsub_board_status_blocked = null;
 
     // Track in-flight subscriptions to prevent duplicates during rapid view switching
     /** @type {Set<string>} */
@@ -674,21 +711,28 @@ export function bootstrap(root_element) {
     /**
      * Compute subscription spec for Issues tab based on filters.
      *
-     * @param {{ status?: string }} filters
+     * A lone selection can be served by a dedicated server-side list; a union
+     * of several statuses cannot, so it falls back to all-issues and lets the
+     * list view narrow the rows client-side.
+     *
+     * @param {{ status?: unknown }} filters
      * @returns {{ type: string, params?: Record<string, string|number|boolean> }}
      */
     function computeIssuesSpec(filters) {
-      const st = String(filters?.status || 'all');
-      if (st === 'ready') {
-        return { type: 'ready-issues' };
+      const selected = normalizeStatusFilters(filters?.status);
+      if (selected.length === 1) {
+        if (selected[0] === 'ready') {
+          return { type: 'ready-issues' };
+        }
+        if (selected[0] === 'in_progress') {
+          return { type: 'in-progress-issues' };
+        }
+        if (selected[0] === 'closed') {
+          return { type: 'closed-issues' };
+        }
       }
-      if (st === 'in_progress') {
-        return { type: 'in-progress-issues' };
-      }
-      if (st === 'closed') {
-        return { type: 'closed-issues' };
-      }
-      // "all" and "open" map to all-issues; client filters apply locally
+      // No selection, a status without a dedicated list (e.g. open), or a
+      // union of several: fetch everything and filter locally.
       return { type: 'all-issues' };
     }
 
@@ -876,6 +920,34 @@ export function bootstrap(root_element) {
               pending_subscriptions.delete('tab:board:blocked');
             });
         }
+        // Blocked column, second source: issues whose stored status is
+        // `blocked`. `bd blocked` reports only dependency-blocked issues, so
+        // without this subscription those issues appear in no lane at all.
+        if (
+          !unsub_board_status_blocked &&
+          !pending_subscriptions.has('tab:board:status-blocked')
+        ) {
+          try {
+            sub_issue_stores.register('tab:board:status-blocked', {
+              type: 'status-blocked-issues'
+            });
+          } catch (err) {
+            log('register board:status-blocked store failed: %o', err);
+          }
+          pending_subscriptions.add('tab:board:status-blocked');
+          void subscriptions
+            .subscribeList('tab:board:status-blocked', {
+              type: 'status-blocked-issues'
+            })
+            .then((u) => (unsub_board_status_blocked = u))
+            .catch((err) => {
+              log('subscribe board status-blocked failed: %o', err);
+              showFatalFromError(err, 'board (Blocked)');
+            })
+            .finally(() => {
+              pending_subscriptions.delete('tab:board:status-blocked');
+            });
+        }
       } else {
         // Unsubscribe all board lists when leaving the board view
         if (unsub_board_ready) {
@@ -914,6 +986,15 @@ export function bootstrap(root_element) {
             log('unregister board:blocked failed: %o', err);
           }
         }
+        if (unsub_board_status_blocked) {
+          void unsub_board_status_blocked().catch(() => {});
+          unsub_board_status_blocked = null;
+          try {
+            sub_issue_stores.unregister('tab:board:status-blocked');
+          } catch (err) {
+            log('unregister board:status-blocked failed: %o', err);
+          }
+        }
       }
     }
 
@@ -939,7 +1020,10 @@ export function bootstrap(root_element) {
       if (!s.selected_id && s.view === 'board') {
         void board_view.load();
       }
-      window.localStorage.setItem('beads-ui.view', s.view);
+      if (s.view !== persisted_view_value) {
+        window.localStorage.setItem('beads-ui.view', s.view);
+        persisted_view_value = s.view;
+      }
     };
     store.subscribe(onRouteChange);
     // Ensure initial state is reflected (fixes reload on #/epics)

@@ -1,12 +1,15 @@
 /**
  * List selectors utility: compose subscription membership with issues entities
  * and apply view-specific sorting. Provides a lightweight `subscribe` that
- * triggers once per issues envelope to let views re-render.
+ * triggers after coalesced subscription-store updates to let views re-render.
  */
 /**
- * @typedef {{ id: string, title?: string, status?: 'open'|'in_progress'|'closed', priority?: number, issue_type?: string, created_at?: number, updated_at?: number, closed_at?: number, labels?: string[] }} IssueLite
+ * @import { Status } from '../protocol.js'
  */
-import { cmpPriorityThenCreated } from './sort.js';
+/**
+ * @typedef {{ id: string, title?: string, status?: Status, priority?: number, issue_type?: string, created_at?: number, updated_at?: number, closed_at?: number, labels?: string[] }} IssueLite
+ */
+import { cmpClosedDesc, cmpPriorityThenCreated } from './sort.js';
 
 /**
  * Factory for list selectors.
@@ -14,7 +17,7 @@ import { cmpPriorityThenCreated } from './sort.js';
  * Source of truth is per-subscription stores providing snapshots for a given
  * client id. Central issues store fallback has been removed.
  *
- * @param {{ snapshotFor?: (client_id: string) => IssueLite[], subscribe?: (fn: () => void) => () => void }} [issue_stores]
+ * @param {{ snapshotFor?: (client_id: string) => IssueLite[], subscribe?: (fn: (client_id?: string) => void) => () => void, subscribeFor?: (client_ids: string | string[], fn: (client_id: string) => void) => () => void }} [issue_stores]
  */
 export function createListSelectors(issue_stores = undefined) {
   // Sorting comparators are centralized in app/data/sort.js
@@ -29,10 +32,7 @@ export function createListSelectors(issue_stores = undefined) {
     if (!issue_stores || typeof issue_stores.snapshotFor !== 'function') {
       return [];
     }
-    return issue_stores
-      .snapshotFor(client_id)
-      .slice()
-      .sort(cmpPriorityThenCreated);
+    return issue_stores.snapshotFor(client_id);
   }
 
   /**
@@ -46,10 +46,52 @@ export function createListSelectors(issue_stores = undefined) {
   function selectBoardColumn(client_id, _mode, comparator) {
     const arr =
       issue_stores && issue_stores.snapshotFor
-        ? issue_stores.snapshotFor(client_id).slice()
+        ? issue_stores.snapshotFor(client_id)
         : [];
     arr.sort(comparator ?? cmpPriorityThenCreated);
     return arr;
+  }
+
+  /**
+   * Get entities for a Board column fed by more than one subscription.
+   *
+   * The Blocked lane is the union of `bd blocked` (dependency-blocked issues,
+   * whose own status is `open`) and `bd list --status blocked` (issues whose
+   * stored status is `blocked`). The two sources overlap, so entries are
+   * deduplicated by id — first occurrence wins — before sorting.
+   *
+   * @param {string[]} client_ids
+   * @param {'ready'|'blocked'|'in_progress'|'closed'} mode
+   * @param {(a: IssueLite, b: IssueLite) => number} [comparator] - Sort comparator; defaults to closed-desc for `closed`, priority-then-created otherwise.
+   * @returns {IssueLite[]}
+   */
+  function selectBoardColumnUnion(client_ids, mode, comparator) {
+    if (!issue_stores || typeof issue_stores.snapshotFor !== 'function') {
+      return [];
+    }
+    /** @type {IssueLite[]} */
+    const merged = [];
+    /** @type {Set<string>} */
+    const seen = new Set();
+    for (const client_id of Array.isArray(client_ids) ? client_ids : []) {
+      for (const it of issue_stores.snapshotFor(client_id) || []) {
+        const id = String(it?.id ?? '');
+        if (id.length === 0 || seen.has(id)) {
+          continue;
+        }
+        seen.add(id);
+        merged.push(it);
+      }
+    }
+    if (comparator) {
+      merged.sort(comparator);
+    } else if (mode === 'closed') {
+      merged.sort(cmpClosedDesc);
+    } else {
+      // ready/blocked/in_progress share the same sort
+      merged.sort(cmpPriorityThenCreated);
+    }
+    return merged;
   }
 
   /**
@@ -76,12 +118,20 @@ export function createListSelectors(issue_stores = undefined) {
   }
 
   /**
-   * Subscribe for re-render; triggers once per issues envelope.
+   * Subscribe for re-render after coalesced subscription-store updates.
    *
-   * @param {() => void} fn
+   * @param {(client_id?: string) => void} fn
+   * @param {string | string[]} [client_ids]
    * @returns {() => void}
    */
-  function subscribe(fn) {
+  function subscribe(fn, client_ids = undefined) {
+    if (
+      client_ids &&
+      issue_stores &&
+      typeof issue_stores.subscribeFor === 'function'
+    ) {
+      return issue_stores.subscribeFor(client_ids, fn);
+    }
     if (issue_stores && typeof issue_stores.subscribe === 'function') {
       return issue_stores.subscribe(fn);
     }
@@ -91,6 +141,7 @@ export function createListSelectors(issue_stores = undefined) {
   return {
     selectIssuesFor,
     selectBoardColumn,
+    selectBoardColumnUnion,
     selectEpicChildren,
     subscribe
   };

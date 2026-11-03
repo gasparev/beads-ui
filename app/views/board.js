@@ -1,4 +1,8 @@
+/**
+ * @import { Status } from '../protocol.js'
+ */
 import { html, render } from 'lit-html';
+import { repeat } from 'lit-html/directives/repeat.js';
 import { createListSelectors } from '../data/list-selectors.js';
 import {
   SORT_ORDER_COMPARATORS,
@@ -16,7 +20,7 @@ import { createTypeBadge } from '../utils/type-badge.js';
  * @typedef {{
  *   id: string,
  *   title?: string,
- *   status?: 'open'|'in_progress'|'closed',
+ *   status?: Status,
  *   priority?: number,
  *   issue_type?: string,
  *   created_at?: number,
@@ -29,14 +33,27 @@ import { createTypeBadge } from '../utils/type-badge.js';
 /**
  * Map column IDs to their corresponding status values.
  *
- * @type {Record<string, 'open'|'in_progress'|'closed'>}
+ * The Blocked lane is the union of dependency-blocked issues and issues whose
+ * stored status is `blocked`. A drop must produce membership in the lane it
+ * lands on, and setting `open` only lands in Blocked when the issue happens to
+ * be dependency-blocked — so `blocked-col` sets the stored status `blocked`.
+ *
+ * @type {Record<string, 'open'|'in_progress'|'blocked'|'closed'>}
  */
 const COLUMN_STATUS_MAP = {
-  'blocked-col': 'open',
+  'blocked-col': 'blocked',
   'ready-col': 'open',
   'in-progress-col': 'in_progress',
   'closed-col': 'closed'
 };
+
+const BOARD_CLIENT_IDS = [
+  'tab:board:ready',
+  'tab:board:blocked',
+  'tab:board:status-blocked',
+  'tab:board:in-progress',
+  'tab:board:closed'
+];
 
 /**
  * Create the Board view with Blocked, Ready, In progress, Closed.
@@ -52,7 +69,7 @@ const COLUMN_STATUS_MAP = {
  * @param {(id: string) => void} gotoIssue - Navigate to issue detail.
  * @param {{ getState: () => any, setState: (patch: any) => void, subscribe?: (fn: (s:any)=>void)=>()=>void }} [store]
  * @param {{ selectors: { getIds: (client_id: string) => string[], count?: (client_id: string) => number } }} [subscriptions]
- * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: () => void) => () => void }} [issueStores]
+ * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: (client_id?: string) => void) => () => void, subscribeFor?: (client_ids: string | string[], fn: (client_id: string) => void) => () => void }} [issueStores]
  * @param {(type: string, payload: unknown) => Promise<unknown>} [transport] - Transport function for sending updates
  * @returns {{ load: () => Promise<void>, clear: () => void }}
  */
@@ -246,7 +263,7 @@ export function createBoardView(
    * @param {unknown} value
    * @param {IssueLite | null} fallback_issue
    * @param {string} issue_id
-   * @param {'open'|'in_progress'|'closed'} new_status
+   * @param {'open'|'in_progress'|'blocked'|'closed'} new_status
    * @returns {IssueLite}
    */
   function normalizeIssueLite(value, fallback_issue, issue_id, new_status) {
@@ -478,7 +495,7 @@ export function createBoardView(
    * subscriptions remain authoritative and will reconcile this optimistic view.
    *
    * @param {string} issue_id
-   * @param {'open'|'in_progress'|'closed'} new_status
+   * @param {'open'|'in_progress'|'blocked'|'closed'} new_status
    * @param {string} target_column_id
    * @param {unknown} updated_value
    */
@@ -693,7 +710,11 @@ export function createBoardView(
           role="list"
           aria-labelledby=${id + '-header'}
         >
-          ${items.map((it) => cardTemplate(it))}
+          ${repeat(
+            items,
+            (it) => it.id,
+            (it, index) => cardTemplate(it, title, index === 0)
+          )}
         </div>
       </section>
     `;
@@ -701,22 +722,24 @@ export function createBoardView(
 
   /**
    * @param {IssueLite} it
+   * @param {string} column_title
+   * @param {boolean} is_first
    */
-  function cardTemplate(it) {
+  function cardTemplate(it, column_title, is_first) {
+    const title = it.title || '(no title)';
     return html`
       <article
         class="board-card"
         data-issue-id=${it.id}
         role="listitem"
-        tabindex="-1"
+        tabindex=${is_first ? '0' : '-1'}
+        aria-label=${`Issue ${title} - Column ${column_title}`}
         draggable="true"
         @click=${(/** @type {MouseEvent} */ ev) => onCardClick(ev, it.id)}
         @dragstart=${(/** @type {DragEvent} */ ev) => onDragStart(ev, it.id)}
         @dragend=${onDragEnd}
       >
-        <div class="board-card__title text-truncate">
-          ${it.title || '(no title)'}
-        </div>
+        <div class="board-card__title text-truncate">${title}</div>
         <div class="board-card__meta">
           ${createTypeBadge(it.issue_type)} ${createPriorityBadge(it.priority)}
           ${createLabelBadges(it.labels)}
@@ -793,7 +816,7 @@ export function createBoardView(
    * Update issue status via WebSocket transport.
    *
    * @param {string} issue_id
-   * @param {'open'|'in_progress'|'closed'} new_status
+   * @param {'open'|'in_progress'|'blocked'|'closed'} new_status
    * @param {string} target_column_id
    */
   async function updateIssueStatus(issue_id, new_status, target_column_id) {
@@ -818,55 +841,6 @@ export function createBoardView(
 
   function doRender() {
     render(template(), mount_element);
-    postRenderEnhance();
-  }
-
-  /**
-   * Enhance rendered board with a11y and keyboard navigation.
-   * - Roving tabindex per column (first card tabbable).
-   * - ArrowUp/ArrowDown within column.
-   * - ArrowLeft/ArrowRight to adjacent non-empty column (focus top card).
-   * - Enter/Space to open details for focused card.
-   */
-  function postRenderEnhance() {
-    try {
-      /** @type {HTMLElement[]} */
-      const columns = Array.from(
-        mount_element.querySelectorAll('.board-column')
-      );
-      for (const col of columns) {
-        const body = /** @type {HTMLElement|null} */ (
-          col.querySelector('.board-column__body')
-        );
-        if (!body) {
-          continue;
-        }
-        /** @type {HTMLElement[]} */
-        const cards = Array.from(body.querySelectorAll('.board-card'));
-        // Assign aria-label using column header for screen readers
-        const header = /** @type {HTMLElement|null} */ (
-          col.querySelector('.board-column__header')
-        );
-        const col_name = header ? header.textContent?.trim() || '' : '';
-        for (const card of cards) {
-          const title_el = /** @type {HTMLElement|null} */ (
-            card.querySelector('.board-card__title')
-          );
-          const t = title_el ? title_el.textContent?.trim() || '' : '';
-          card.setAttribute(
-            'aria-label',
-            `Issue ${t || '(no title)'} — Column ${col_name}`
-          );
-          // Default roving setup
-          card.tabIndex = -1;
-        }
-        if (cards.length > 0) {
-          cards[0].tabIndex = 0;
-        }
-      }
-    } catch {
-      // non-fatal
-    }
   }
 
   // Delegate keyboard handling from mount_element
@@ -1156,8 +1130,11 @@ export function createBoardView(
           'in_progress',
           cmp
         );
-        const blocked = selectors.selectBoardColumn(
-          'tab:board:blocked',
+        // Blocked is the union of dependency-blocked issues (`bd blocked`)
+        // and issues whose stored status is `blocked`; the two are disjoint
+        // queries but may overlap, so the selector dedupes by id.
+        const blocked = selectors.selectBoardColumnUnion(
+          ['tab:board:blocked', 'tab:board:status-blocked'],
           'blocked',
           cmp
         );
@@ -1207,7 +1184,7 @@ export function createBoardView(
       } catch {
         // ignore
       }
-    });
+    }, BOARD_CLIENT_IDS);
   }
 
   return {
@@ -1241,6 +1218,7 @@ export function createBoardView(
         const total_items =
           cnt('tab:board:ready') +
           cnt('tab:board:blocked') +
+          cnt('tab:board:status-blocked') +
           cnt('tab:board:in-progress') +
           cnt('tab:board:closed');
         const data = /** @type {any} */ (_data);

@@ -1,16 +1,26 @@
+/**
+ * @import { Status } from '../protocol.js'
+ * @import { StatusFilter } from '../utils/status.js'
+ */
 import { html, render } from 'lit-html';
+import { repeat } from 'lit-html/directives/repeat.js';
 import { createListSelectors } from '../data/list-selectors.js';
 import { cmpClosedDesc } from '../data/sort.js';
 import { ISSUE_TYPES, typeLabel } from '../utils/issue-type.js';
 import { issueHashFor } from '../utils/issue-url.js';
 import { debug } from '../utils/logging.js';
-import { statusLabel } from '../utils/status.js';
+import {
+  FILTERABLE_STATUSES,
+  normalizeStatusFilters,
+  sameStatusFilters,
+  statusLabel
+} from '../utils/status.js';
 import { createIssueRowRenderer } from './issue-row.js';
 
 // List view implementation; requires a transport send function.
 
 /**
- * @typedef {{ id: string, title?: string, status?: 'closed'|'open'|'in_progress', priority?: number, issue_type?: string, assignee?: string, labels?: string[] }} Issue
+ * @typedef {{ id: string, title?: string, status?: Status, priority?: number, issue_type?: string, assignee?: string, labels?: string[] }} Issue
  */
 
 /**
@@ -21,7 +31,7 @@ import { createIssueRowRenderer } from './issue-row.js';
  * @param {(hash: string) => void} [navigate_fn] - Navigation function (defaults to setting location.hash).
  * @param {{ getState: () => any, setState: (patch: any) => void, subscribe: (fn: (s:any)=>void)=>()=>void }} [store] - Optional state store.
  * @param {{ selectors: { getIds: (client_id: string) => string[] } }} [_subscriptions]
- * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: () => void) => () => void }} [issueStores]
+ * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: (client_id?: string) => void) => () => void, subscribeFor?: (client_ids: string | string[], fn: (client_id: string) => void) => () => void }} [issueStores]
  * @returns {{ load: () => Promise<void>, destroy: () => void }} View API.
  */
 /**
@@ -32,7 +42,7 @@ import { createIssueRowRenderer } from './issue-row.js';
  * @param {(hash: string) => void} [navigateFn]
  * @param {{ getState: () => any, setState: (patch: any) => void, subscribe: (fn: (s:any)=>void)=>()=>void }} [store]
  * @param {{ selectors: { getIds: (client_id: string) => string[] } }} [_subscriptions]
- * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: () => void) => () => void }} [issue_stores]
+ * @param {{ snapshotFor?: (client_id: string) => any[], subscribe?: (fn: (client_id?: string) => void) => () => void, subscribeFor?: (client_ids: string | string[], fn: (client_id: string) => void) => () => void }} [issue_stores]
  * @returns {{ load: () => Promise<void>, destroy: () => void }}
  */
 export function createListView(
@@ -46,7 +56,7 @@ export function createListView(
   const log = debug('views:list');
   // Touch unused param to satisfy lint rules without impacting behavior
   /** @type {any} */ (void _subscriptions);
-  /** @type {string[]} */
+  /** @type {StatusFilter[]} */
   let status_filters = [];
   /** @type {string} */
   let search_text = '';
@@ -60,18 +70,6 @@ export function createListView(
   let unsubscribe = null;
   let status_dropdown_open = false;
   let type_dropdown_open = false;
-
-  /**
-   * Normalize legacy string filter to array format.
-   *
-   * @param {string | string[] | undefined} val
-   * @returns {string[]}
-   */
-  function normalizeStatusFilter(val) {
-    if (Array.isArray(val)) return val;
-    if (typeof val === 'string' && val !== '' && val !== 'all') return [val];
-    return [];
-  }
 
   /**
    * Normalize legacy string filter to array format.
@@ -100,21 +98,48 @@ export function createListView(
   });
 
   /**
-   * Toggle a status filter chip.
+   * Apply a new status selection: publish it and refetch the list.
    *
-   * @param {string} status
+   * @param {StatusFilter[]} next
    */
-  const toggleStatusFilter = async (status) => {
-    if (status_filters.includes(status)) {
-      status_filters = status_filters.filter((s) => s !== status);
-    } else {
-      status_filters = [...status_filters, status];
-    }
-    log('status toggle %s -> %o', status, status_filters);
+  const applyStatusFilters = async (next) => {
+    // Normalize here too: the store normalizes what it publishes, and a local
+    // value that disagreed with it would survive — the store suppresses the
+    // notification when its own value is unchanged.
+    status_filters = normalizeStatusFilters(next);
     if (store) {
       store.setState({ filters: { status: status_filters } });
     }
     await load();
+  };
+
+  /**
+   * Toggle a stored status. Selecting one leaves the `ready` scope: readiness
+   * is a membership the server answers with its own list, so it cannot be
+   * unioned with statuses the client filters row by row.
+   *
+   * @param {Status} status
+   */
+  const toggleStatusFilter = async (status) => {
+    const stored = status_filters.filter((s) => s !== 'ready');
+    const next = stored.includes(status)
+      ? stored.filter((s) => s !== status)
+      : [...stored, status];
+    log('status toggle %s -> %o', status, next);
+    await applyStatusFilters(next);
+  };
+
+  /**
+   * Select the list scope. `ready` is exclusive with the stored statuses, so
+   * picking it clears them.
+   *
+   * @param {'all' | 'ready'} scope
+   */
+  const selectStatusScope = async (scope) => {
+    /** @type {StatusFilter[]} */
+    const next = scope === 'ready' ? ['ready'] : [];
+    log('status scope %s', scope);
+    await applyStatusFilters(next);
   };
 
   /**
@@ -193,7 +218,7 @@ export function createListView(
   if (store) {
     const s = store.getState();
     if (s && s.filters && typeof s.filters === 'object') {
-      status_filters = normalizeStatusFilter(s.filters.status);
+      status_filters = normalizeStatusFilters(s.filters.status);
       search_text = s.filters.search || '';
       type_filters = normalizeTypeFilter(s.filters.type);
     }
@@ -206,10 +231,17 @@ export function createListView(
    * Build lit-html template for the list view.
    */
   function template() {
+    // `ready` is a server-side membership, never a row predicate; every other
+    // entry narrows the rows as a union.
+    const is_ready_scope = status_filters.includes('ready');
+    const stored_status_filters = status_filters.filter((s) => s !== 'ready');
+
     let filtered = issues_cache;
-    if (status_filters.length > 0 && !status_filters.includes('ready')) {
+    if (stored_status_filters.length > 0) {
       filtered = filtered.filter((it) =>
-        status_filters.includes(String(it.status || ''))
+        /** @type {string[]} */ (stored_status_filters).includes(
+          String(it.status || '')
+        )
       );
     }
     if (search_text) {
@@ -226,7 +258,10 @@ export function createListView(
       );
     }
     // Sorting: closed list is a special case → sort by closed_at desc only
-    if (status_filters.length === 1 && status_filters[0] === 'closed') {
+    if (
+      stored_status_filters.length === 1 &&
+      stored_status_filters[0] === 'closed'
+    ) {
       filtered = filtered.slice().sort(cmpClosedDesc);
     }
 
@@ -241,15 +276,54 @@ export function createListView(
             <span class="filter-dropdown__arrow">▾</span>
           </button>
           <div class="filter-dropdown__menu">
-            ${['ready', 'open', 'in_progress', 'closed'].map(
+            <!--
+              Scope and status are separate concepts, so they are separate
+              controls: "Ready only" is a server-side membership that cannot be
+              combined with a client-side status union, and a radio pair makes
+              that exclusivity visible before the click instead of silently
+              clearing the checkboxes after it.
+            -->
+            <div class="filter-dropdown__group-label">Scope</div>
+            ${[
+              // "By status" names the mode, not the result: it stays accurate
+              // once a checkbox narrows the list, where "All issues" would not.
+              { scope: /** @type {const} */ ('all'), label: 'By status' },
+              { scope: /** @type {const} */ ('ready'), label: 'Ready only' }
+            ].map(
+              (opt) => html`
+                <label
+                  class="filter-dropdown__option filter-dropdown__option--scope"
+                >
+                  <input
+                    type="radio"
+                    name="list-status-scope"
+                    .checked=${opt.scope === 'ready'
+                      ? is_ready_scope
+                      : !is_ready_scope}
+                    @change=${() => selectStatusScope(opt.scope)}
+                  />
+                  ${opt.label}
+                </label>
+              `
+            )}
+            <div class="filter-dropdown__divider" role="separator"></div>
+            <div class="filter-dropdown__group-label">Status</div>
+            ${FILTERABLE_STATUSES.map(
               (s) => html`
-                <label class="filter-dropdown__option">
+                <label
+                  class="filter-dropdown__option filter-dropdown__option--status ${is_ready_scope
+                    ? 'is-disabled'
+                    : ''}"
+                >
                   <input
                     type="checkbox"
-                    .checked=${status_filters.includes(s)}
+                    ?disabled=${is_ready_scope}
+                    .checked=${
+                      /** @type {string[]} */ (status_filters).includes(s)
+                    }
                     @change=${() => toggleStatusFilter(s)}
                   />
-                  ${s === 'ready' ? 'Ready' : statusLabel(s)}
+                  ${statusLabel(s)}
                 </label>
               `
             )}
@@ -315,7 +389,7 @@ export function createListView(
                   </tr>
                 </thead>
                 <tbody role="rowgroup">
-                  ${filtered.map((it) => row_renderer(it))}
+                  ${repeat(filtered, (it) => it.id, row_renderer)}
                 </tbody>
               </table>
             </div>`}
@@ -355,6 +429,9 @@ export function createListView(
       }
       if (typeof patch.priority === 'number') {
         await sendFn('update-priority', { id, priority: patch.priority });
+      }
+      if (typeof patch.issue_type === 'string') {
+        await sendFn('update-type', { id, type: patch.issue_type });
       }
     } catch {
       // ignore failures; UI state remains as-is
@@ -529,11 +606,10 @@ export function createListView(
         doRender();
       }
       if (s.filters && typeof s.filters === 'object') {
-        const next_status = normalizeStatusFilter(s.filters.status);
+        const next_status = normalizeStatusFilters(s.filters.status);
         const next_search = s.filters.search || '';
         let needs_render = false;
-        const status_changed =
-          JSON.stringify(next_status) !== JSON.stringify(status_filters);
+        const status_changed = !sameStatusFilters(next_status, status_filters);
         if (status_changed) {
           status_filters = next_status;
           // Reload on any status scope change to keep cache correct
@@ -559,8 +635,10 @@ export function createListView(
   }
 
   // Live updates: recompose and re-render when issue stores change
+  /** @type {(() => void) | null} */
+  let unsubscribe_selectors = null;
   if (selectors) {
-    selectors.subscribe(() => {
+    unsubscribe_selectors = selectors.subscribe(() => {
       try {
         issues_cache = /** @type {Issue[]} */ (
           selectors.selectIssuesFor('tab:issues')
@@ -569,7 +647,7 @@ export function createListView(
       } catch {
         // ignore
       }
-    });
+    }, 'tab:issues');
   }
 
   return {
@@ -580,6 +658,10 @@ export function createListView(
       if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;
+      }
+      if (unsubscribe_selectors) {
+        unsubscribe_selectors();
+        unsubscribe_selectors = null;
       }
     }
   };
